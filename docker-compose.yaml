@@ -1,0 +1,39 @@
+
+services:
+  ollama:
+    image: ollama/ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    command: >
+      sh -c "ollama serve & sleep 2 && ollama pull mistral:7b-instruct-q4_K_M && tail -f /dev/null"
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    ports:
+      - "5000:5000"
+    environment:
+      - TAVILY_API_KEY= "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"
+    depends_on:
+      - ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:8080"
+    environment:
+      - API_URL=http://backend:5000/reply
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  ollama:

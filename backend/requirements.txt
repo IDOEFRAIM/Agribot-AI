@@ -1,0 +1,13 @@
+gunicorn
+
+langchain-community
+langchain-core
+langchain_ollama
+langgraph
+langsmith
+flask
+requests
+timer
+langdetect
+tavily
+boto3
