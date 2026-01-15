@@ -17,6 +17,9 @@ class GlobalAgriState(TypedDict):
     # --- Context ---
     zone_id: str
     requete_utilisateur: Optional[str] # Optionnel car peut être un rapport auto
+    user_id: str = "anonymous"
+    user_reliability_score: float = 0.5 # Pilier 2 - Note de confiance (0.0 à 1.0)
+    is_sms_mode: bool = False # Pilier 4 - Mode SMS activé
     
     # --- Flow Control ---
     flow_type: str # "MESSAGE" ou "REPORT"

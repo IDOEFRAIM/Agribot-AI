@@ -76,7 +76,10 @@ class ClimateVigilance:
                 precip=float(w["precip"]),
                 doy=datetime.now().timetuple().tm_yday,
                 lat=float(c.get("lat", 12.37)),
-                distance_km=25.0
+                distance_km=25.0,
+                # Nouveaux paramètres Météo Décisionnelle
+                wind_speed_kmh=float(w.get("wind_speed", 10.0)),
+                rain_prob_next_6h=float(w.get("rain_prob", 0.0))
             )
             
             # 3. Risque Inondation
@@ -103,6 +106,10 @@ class ClimateVigilance:
 
         diag = state["raw_diagnosis"]
         flood = state["flood_risk"]
+        
+        # [MODIF] Injection des Alertes Critiques Calculées Techniquement
+        # Cela force l'IA à respecter les interdits (Pilier 3)
+        critical_alerts = diag.get("alerts_critiques", [])
 
         if not self.llm:
             return {"final_response": self._fallback_template(diag, flood)}
@@ -111,17 +118,20 @@ class ClimateVigilance:
         system_prompt = (
             "Tu es 'Sentinelle d'AgriConnect', l'expert agricole du Sahel.\n"
             "TON : Respectueux, direct, encourageant. Utilise des images simples.\n"
-            "RÈGLES :\n"
-            "1. PRIORITÉ : Si une inondation est prévue, l'alerte doit être au début.\n"
-            "2. SOLUTIONS LOCALES : Priorise le compost, le paillage et le Zaï.\n"
-            "3. FORMAT : Utilise des listes à puces et des emojis pour la lisibilité sur mobile."
+            "RÈGLES CRITIQUES :\n"
+            "1. INTERDICTIONS : Si la liste 'CRITICAL_ALERTS' contient des éléments, TU DOIS COMMENCER par eux écrit en MAJUSCULES.\n"
+            "2. EXPLICABILITÉ : Explique toujours 'Pourquoi' (ex: 'Ne sème pas car le sol est sec').\n"
+            "3. FORMAT : Court et lisible."
         )
         
         human_content = (
+            f"Question Agriculteur : '{state['user_query']}'\n\n"
+            f"--- DONNÉES TECHNIQUES ---\n"
             f"Culture : {diag.get('culture')}\n"
-            f"Diagnostic : {diag}\n"
-            f"Risque Inondation : {flood}\n"
-            f"Question Agriculteur : {state['user_query']}"
+            f"RISQUE INONDATION : {flood.get('risk_level')} ({flood.get('alert_message')})\n"
+            f"CRITICAL_ALERTS (A RESPECTER ABSOLUMENT) : {json.dumps(critical_alerts, ensure_ascii=False)}\n"
+            f"Bilan Hydrique : {diag.get('bilan')} mm\n"
+            f"Recommandations Techniques : {diag.get('recommandations')}"
         )
 
         try:

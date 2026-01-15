@@ -103,8 +103,54 @@ class AgrimarketTool:
             }
         return prices
 
-    def analyze_market_timing(self, crop_name: str) -> Dict[str, Any]:
-        """Conseille le producteur sur le stockage (Warrantage)."""
+    def check_price_fairness(self, crop_name: str, offered_price: float, quantity_kg: float = 100) -> Dict[str, Any]:
+        """
+        [PILIER 1 & 2] Vérifie si le prix proposé est juste par rapport au marché.
+        Lutte contre la spéculation (Transparence).
+        """
+        crop_key = crop_name.lower().strip()
+        data = self._MARKET_DATA.get(crop_key)
+        
+        if not data:
+             return {"status": "UNKNOWN", "message": "Culture inconnue"}
+
+        current_month = datetime.now().month
+        # Détermination du prix de référence du marché local
+        if 9 <= current_month <= 11:
+             ref_price = data.base_price_harvest
+        elif 6 <= current_month <= 8:
+             ref_price = data.peak_price_soudure
+        else:
+             ref_price = (data.base_price_harvest + data.peak_price_soudure) // 2
+
+        # Comparaison
+        diff_percent = ((offered_price - ref_price) / ref_price) * 100
+        
+        status = "FAIR"
+        advice = "Le prix est aligné avec le marché."
+        
+        if diff_percent < -15:
+            status = "LOWBALL" # Prix cassé (Arnaque spéculateur)
+            loss = (ref_price - offered_price) * quantity_kg
+            advice = f"🚨 ATTENTION : Ce prix est {abs(int(diff_percent))}% sous la moyenne ! Vous perdez {int(loss)} FCFA sur ce lot. Ne vendez pas si possible."
+        elif diff_percent > 15:
+            status = "PREMIUM"
+            advice = "✅ Excellente offre ! Au-dessus du marché."
+
+        return {
+            "market_ref_price": ref_price,
+            "offered_price": offered_price,
+            "status": status,
+            "advice": advice,
+            "difference_percent": round(diff_percent, 1)
+        }
+
+    def analyze_market_timing(self, crop_name: str, quantity_kg: float = 1000) -> Dict[str, Any]:
+        """
+        [PILIER 2] Analyse Warrantage (Stockage).
+        Calcule le gain financier concret du stockage.
+        CoT: Explique POURQUOI stocker en chiffrant le gain.
+        """
         crop_key = crop_name.lower().strip()
         data = self._MARKET_DATA.get(crop_key)
         current_month = datetime.now().month
@@ -113,13 +159,29 @@ class AgrimarketTool:
             return {"status": "Erreur", "message": "Culture non répertoriée."}
 
         # Logique : Stocker est rentable si le prix n'est pas régulé et qu'on est en période de récolte
-        should_store = not data.is_regulated and (9 <= current_month <= 12)
+        should_store = not data.is_regulated and (9 <= current_month <= 12 or 1 <= current_month <= 2)
         
+        potential_gain = 0
+        if should_store:
+            # Gain projeté = (Prix Soudure - Prix Récolte) * Quantité - (Coût stockage ~10%)
+            price_delta = data.peak_price_soudure - data.base_price_harvest
+            gross_gain = price_delta * quantity_kg
+            storage_cost = gross_gain * 0.15 # 15% pour le magasinage/pertes
+            potential_gain = int(gross_gain - storage_cost)
+
+        warrantage_status = "CONSEILLÉ" if should_store else "NON PRIORITAIRE"
+        
+        conseil_text = (
+            f"Stockez maintenant ! Le sac passera de {data.base_price_harvest} à {data.peak_price_soudure} FCFA.\n"
+            f"💰 GAIN ESTIMÉ : +{potential_gain} FCFA pour {quantity_kg}kg (net de frais)."
+        ) if should_store else "Vente immédiate recommandée pour la trésorerie ou prix stable."
+
         return {
             "culture": data.crop,
-            "etat_actuel": "Récolte" if 9 <= current_month <= 11 else "Soudure" if 6 <= current_month <= 8 else "Transition",
-            "warrantage": "CONSEILLÉ" if should_store else "NON PRIORITAIRE",
-            "conseil": "Stockez pour vendre à prix d'or en période de soudure (juin-août)." if should_store else "Vente immédiate recommandée pour la trésorerie."
+            "etat_actuel": "Récolte/Abondance" if should_store else "Soudure/Haute Saison",
+            "warrantage": warrantage_status,
+            "conseil": conseil_text,
+            "gain_potentiel_stockage": potential_gain
         }
 
     def calculate_profitability(self, crop_name: str, surface_ha: float, yield_kg_ha: float, total_costs: float) -> Dict[str, Any]:

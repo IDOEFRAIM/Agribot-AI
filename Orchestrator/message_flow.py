@@ -7,13 +7,14 @@ from orchestrator.state import GlobalAgriState
 from services.utils.cache import StorageManager
 from agents.climate_vigilance import ClimateVigilance
 from agents.agri_business_coach import AgriBusinessCoach
+from tools.collaboration.alert_reporter import AlertReporter
 
 logger = logging.getLogger("MessageFlow")
 
 class MessageResponseFlow:
     """
-    Orchestrateur LangGraph pour fusionner l'intelligence climatique 
-    et économique (Agri-Business).
+    Orchestrateur LangGraph pour fusionner l'intelligence climatique, 
+    économique (Agri-Business), et collaborative (Sentinelle).
     """
     def __init__(self, llm_client=None):
         self.storage = StorageManager() 
@@ -28,43 +29,91 @@ class MessageResponseFlow:
         # Agents spécialisés
         self.meteo_agent = ClimateVigilance(llm_client=llm_client)
         self.market_agent = AgriBusinessCoach(llm_client=llm_client)
+        
+        # Nouveaux modules Piliers 1 & 4
+        self.alert_tool = AlertReporter()
+
+    def run_reporting(self, state: GlobalAgriState) -> Dict[str, Any]:
+        """Gère les signalements (Pilier 1 : La Sentinelle)."""
+        logger.info("--- NODE: REPORTING ---")
+        query = state.get("requete_utilisateur", "") or "Signalement vide"
+        user_id = state.get("user_id", "anonymous")
+        zone_id = state.get("zone_id", "unknown")
+        
+        report_result = self.alert_tool.report_event(
+            user_id=user_id,
+            zone_id=zone_id,
+            description=query,
+            event_type="USER_REPORT"
+        )
+        
+        # Mise à jour du Trust Score (Pilier 2)
+        current_score = state.get("user_reliability_score", 0.5)
+        bonus = report_result.get("trust_score_update", 0)
+        # On plafonne à 1.0, chaque action positive donne un petit boost
+        new_score = min(1.0, current_score + (bonus / 100.0))
+        
+        return {
+            "final_response": report_result["response"],
+            "user_reliability_score": new_score
+        }
 
     def run_meteo(self, state: GlobalAgriState) -> Dict[str, Any]:
         """Exécute l'analyse climatique et hydrique."""
         logger.info("--- NODE: CLIMATE VIGILANCE ---")
         zone_id = state.get("zone_id", "Centre")
         
-        # Simulation/Récupération des données locales
-        weather_data = {"t_min": 25, "t_max": 35, "rh": 40, "precip": 0} 
+        # Simulation/Récupération des données locales (Devraient être fetchées d'une API externe)
+        weather_data = {
+            "t_min": 25, 
+            "t_max": 35, 
+            "rh": 40, 
+            "precip": 0, 
+            "wind_speed": 12,    # Ajout Pilier 3 (Sécurité)
+            "rain_prob": 10      # Ajout Pilier 3 (Sécurité)
+        } 
+        
         try:
+            # En production, on utiliserait self.storage pour récupérer la météo réelle via API
             raw = self.storage.get_raw_data(zone_id=zone_id, category="METEO_VECTOR", limit=1)
             if raw: weather_data.update(raw[0])
         except Exception as e:
             logger.error(f"Erreur cache météo: {e}")
 
+        # Construction explicite pour satisfaire le typage strict
         agent_state = {
-            "user_query": state.get("requete_utilisateur", ""),
+            "user_query": str(state.get("requete_utilisateur", "")),
             "weather_data": weather_data,
-            "culture_info": {"crop_name": state.get("crop", "Maïs"), "location": zone_id},
-            "final_response": ""
+            "culture_info": {"crop_name": str(state.get("crop", "Maïs")), "location": str(zone_id)},
+            "final_response": "",
+            "raw_diagnosis": None,
+            "flood_risk": None,
+            "error_log": []
         }
         
         # Cycle interne de l'agent météo
         res = self.meteo_agent.validate_and_calculate(agent_state)
+        # Gestion d'erreur robuste : Si l'agent échoue, on ne bloque pas tout le flux
+        if res.get("error_log"):
+            logger.error(f"Erreur agent météo: {res['error_log']}")
+            return {"meteo_info": "Données météo indisponibles."}
+            
         agent_state.update(res)
         final = self.meteo_agent.generate_expert_response(agent_state)
         
         return {"meteo_info": final["final_response"]}
 
-    def run_market(self, state: GlobalAgriState) -> Dict[str, Any]:
-        """Exécute l'analyse de rentabilité et d'opportunité de marché."""
-        logger.info("--- NODE: AGRI-BUSINESS COACH ---")
-        
+    def market_node(self, state: GlobalAgriState):
+        logger.info("--- NODE: MARKET AGENT ---")
+        # Construction typée pour Agent Marché
         agent_state = {
-            "zone_id": state.get("zone_id", "Centre"),
-            "user_query": state.get("requete_utilisateur", ""),
-            "user_profile": {"crop": state.get("crop", "Maïs")},
-            "final_response": ""
+            "zone_id": str(state.get("zone_id", "Centre")),
+            "user_query": str(state.get("requete_utilisateur", "")),
+            "user_profile": {"crop": str(state.get("crop", "Maïs"))},
+            "final_response": "",
+            "technical_advice_raw": None,
+            "status": "INIT",
+            "metadata": {}
         }
         
         # Cycle interne de l'agent marché
@@ -109,17 +158,20 @@ class MessageResponseFlow:
             return {"final_response": f"Stratégie Climat: {meteo_resp}\nStratégie Marché: {market_resp}"}
 
     def build_graph(self):
-        """Compile le workflow de décision."""
+        """Compile le workflow de décision dynamique."""
         workflow = StateGraph(GlobalAgriState)
         
-        # Définition des nœuds d'expertise
+        # Définition des nœuds
+        # On garde les nœuds principaux pour le test
         workflow.add_node("meteo_node", self.run_meteo)
         workflow.add_node("market_node", self.run_market)
         workflow.add_node("synthesizer_node", self.synthesize_answer)
         
-        # Flux de données : Météo -> Marché -> Synthèse
-        # Cette séquence permet à l'agent marché d'avoir potentiellement accès aux infos météo dans l'état
+        # MODE TEST : On force le passage par Météo puis Marché
+        # On contourne le classifieur et le reporting pour l'instant
         workflow.set_entry_point("meteo_node")
+        
+        # Flux Expert (Meteo -> Market -> Synthèse)
         workflow.add_edge("meteo_node", "market_node")
         workflow.add_edge("market_node", "synthesizer_node")
         workflow.add_edge("synthesizer_node", END)

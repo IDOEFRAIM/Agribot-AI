@@ -137,18 +137,25 @@ class AgriBusinessCoach:
 
             # --- CAS 3 : INFO / CONSEIL ---
             else:
-                # CORRECTION MAJEURE ICI : Suppression de l'argument 'month'
-                # L'outil calcule le mois tout seul via datetime.now()
-                timing = self.market_tool.analyze_market_timing(crop)
+                # Analyse avancée avec calcul de rentabilité Warrantage
+                timing = self.market_tool.analyze_market_timing(crop, quantity_kg=1000) # Simulation sur 1 tonne
                 
                 response_parts.append(f"📈 **INTELLIGENCE MARCHÉ : {crop.upper()}**")
                 
                 if timing.get("warrantage") == "CONSEILLÉ":
                     # Insertion du visuel Warrantage
-                    response_parts.append("\n")
-                    response_parts.append(f"💰 **CONSEIL OR :** {timing.get('conseil')}")
+                    gain = timing.get('gain_potentiel_stockage', 0)
+                    response_parts.append("\n🌟 **OPPORTUNITÉ OR (Warrantage)**")
+                    response_parts.append(f"Ne vendez pas tout de suite ! Stockez.")
+                    response_parts.append(f"💰 Gain estimé (1T) : +{gain} FCFA dans 6 mois.")
+                    response_parts.append(f"💡 *Banque partenaire prête à financer votre stock.*")
                 else:
-                    response_parts.append(f"ℹ️ **AVIS :** {timing.get('conseil')}")
+                    response_parts.append(f"ℹ️ **STRATÉGIE COURT TERME :** {timing.get('conseil')}")
+                    
+                # Ajout de la référence de prix juste
+                fairness = self.market_tool.check_price_fairness(crop, 0) # Juste pour avoir le prix ref dans le return
+                ref_price = fairness.get("market_ref_price", "N/C")
+                response_parts.append(f"\n🏷️ **Prix Référence (SONAGESS) :** {ref_price} FCFA/kg")
 
         state["technical_advice_raw"] = "\n".join(response_parts)
         state["status"] = status

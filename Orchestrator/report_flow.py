@@ -1,101 +1,186 @@
 import logging
 import json
+from datetime import datetime
 from typing import Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_community.chat_models import ChatOllama
 
-from orchestrator.state import GlobalAgriState
-from tools.meteo.flood_risk import FloodRiskTool
-from tools.subventions.base_subsidy import AgrimarketTool
+from orchestrator.state import GlobalAgriState, Alert, Severity
+from tools.meteo.basis_tools import SahelAgriAdvisor, SoilType 
+from agents.agri_business_coach import AgriBusinessCoach
+from tools.collaboration.alert_reporter import AlertReporter
+from utils.sms_adapter import SMSAdapter
+from rag.components.vector_store import VectorStoreHandler
 
 logger = logging.getLogger("ReportFlow")
 
 class DailyReportFlow:
     """
-    Générateur de bulletins quotidiens proactifs.
-    Fusionne les risques environnementaux et les opportunités économiques.
+    Générateur de bulletins quotidiens PROACTIFS et HOLISTIQUES.
+    Incarne les 4 piliers : Météo Décisionnelle, Finance, Sécurité, Communauté.
     """
     def __init__(self, llm_client=None):
-        self.flood_tool = FloodRiskTool()
-        self.market_tool = AgrimarketTool()
+        self.meteo_advisor = SahelAgriAdvisor() # Pilier 1 & 3: Calculs froids + Alertes techniques
+        self.market_agent = AgriBusinessCoach(llm_client=llm_client) # Pilier 2: Fintech & Warrantage
+        self.alert_tool = AlertReporter() # Pilier 1: Communautaire
+        self.vector_store = VectorStoreHandler() # Pilier 1 & 3: Intelligence externe (Scraping)
         
-        # Initialisation du LLM de synthèse (Mistral est excellent pour le Français)
+        # Initialisation du LLM de synthèse
         try:
             self.llm = llm_client if llm_client else ChatOllama(
                 model="mistral", 
-                base_url="http://localhost:11434", 
+                keep_alive=-1,
                 temperature=0.3
             )
         except Exception as e:
             logger.warning(f"LLM non disponible pour la synthèse : {e}")
             self.llm = None
 
-    def fetch_daily_data(self, state: GlobalAgriState):
-        """Collecte les données fraîches du jour."""
-        logger.info("--- NODE: FETCHING DAILY DATA ---")
-        location = state.get("zone_id", "Ouagadougou")
+    def fetch_daily_data(self, state: GlobalAgriState) -> Dict[str, Any]:
+        """Collecte les données fraîches multidimensionnelles."""
+        logger.info("--- NODE: FETCHING INTEGRATED DATA ---")
+        zone = state.get("zone_id", "Ouagadougou")
+        crop = state.get("crop", "Maïs") # Note: 'crop' n'est pas dans GlobalAgriState standard, on utilisera un default
         
-        # 1. Analyse Risque Inondation (coordonnées moyennes simulées pour la zone)
-        flood_risk = self.flood_tool.check_flood_risk(location, 12.37, -1.52)
-        
-        # 2. Analyse Prix du Marché
-        market_prices = self.market_tool.get_market_prices()
-        
-        # 3. Prévisions Météo Générales
-        weather_summary = {
-            "condition": "Ensoleillé avec passages nuageux",
-            "temp_max": 35, "temp_min": 24, "wind": "15 km/h"
+        # 1. ALERTES COMMUNAUTAIRES (Collaboration)
+        # On regarde s'il y a des dangers signalés par d'autres aujourd'hui (Local DB)
+        recent_events = self.alert_tool.get_recent_alerts(zone)
+        # Transformation en format Alert pour le state
+        new_alerts = []
+        for e in recent_events:
+            if e["severity"] in ["HIGH", "CRITICAL"]:
+                sev = Severity.CRITICAL if e["severity"] == "CRITICAL" else Severity.HIGH
+                new_alerts.append(Alert(source="communauté", message=e["description"], severity=sev))
+
+        # 1b. INTELLIGENCE EXTERNE (Vector Store - Scraping Inondations/Feux/Conflits)
+        # Recherche directe dans les métadonnées pour les alertes récentes type "METEO_ALERT"
+        try:
+            # On scanne les docs de type METEO_ALERT pour la zone concernée
+            # Note: Dans une vraie implémentation, on ferait une recherche vecteur "Danger [Zone]"
+            # Ici, pour être déterministe, on regarde les metadata des derniers docs ajoutés
+            scraped_alerts = []
+            if hasattr(self.vector_store, 'metadata'):
+                for meta in self.vector_store.metadata.values():
+                    if meta.get("source_type") == "METEO_ALERT" and zone.lower() in str(meta).lower():
+                        scraped_alerts.append(meta)
+            
+            for alert in scraped_alerts:
+                content = alert.get("text") or alert.get("content", "Alerte détectée sans détails")
+                # Éviter les doublons exacts
+                if not any(a["message"] == content for a in new_alerts):
+                    new_alerts.append(Alert(source="sentinelle_web", message=f"WEB: {content[:100]}...", severity=Severity.HIGH))
+                    logger.warning(f"🚨 ALERTE WEB DETECTÉE: {content}")
+        except Exception as e:
+            logger.error(f"Erreur lecture Vector Store pour alertes: {e}")
+
+        # 2. DIAGNOSTIC MÉTÉO DÉCISIONNEL
+        # Simulation données météo (devrait venir d'une API externe ou du state précédent)
+        # Si le state contient déjà des données météo (ex: via worker/crawler), on les utilise
+        raw_weather = state.get("meteo_data", {}) or {
+            "t_min": 24, "t_max": 36, "rh": 45, 
+            "precip": 12.0, "wind_speed": 22.0, 
+            "rain_prob": 60
         }
         
-        return {
-            "meteo_data": {"flood_risk": flood_risk, "forecast": weather_summary},
-            "market_data": market_prices
+        # S'assurer que les clés existent, sinon défaut
+        weather_params = {
+            "t_min": raw_weather.get("t_min", 24),
+            "t_max": raw_weather.get("t_max", 36),
+            "rh": raw_weather.get("rh", 45),
+            "precip": raw_weather.get("precip", 0),
+            "wind_speed": raw_weather.get("wind_speed", 10),
+            "rain_prob": raw_weather.get("rain_prob", 0)
         }
 
-    def generate_report(self, state: GlobalAgriState):
-        """Transforme les données en un flash info actionnable."""
-        logger.info("--- NODE: GENERATING ACTIONABLE REPORT ---")
-        
-        context = {
-            "zone": state.get("zone_id", "Ouagadougou"),
-            "meteo": state.get("meteo_data", {}).get("forecast", {}),
-            "risque_inondation": state.get("meteo_data", {}).get("flood_risk", {}),
-            "marche": state.get("market_data", {})
+        meteo_diag = self.meteo_advisor.get_daily_diagnosis(
+            crop_key=crop if isinstance(crop, str) else "Maïs",
+            soil=SoilType.STANDARD,
+            t_min=weather_params["t_min"], t_max=weather_params["t_max"], rh=weather_params["rh"],
+            precip=weather_params["precip"], lat=12.37, doy=datetime.now().timetuple().tm_yday,
+            wind_speed_kmh=weather_params["wind_speed"],
+            rain_prob_next_6h=weather_params["rain_prob"]
+        )
+
+        # 3. INTELLIGENCE MARCHÉ (Warrantage & Prix)
+        market_analysis = self.market_agent.market_tool.analyze_market_timing(
+            crop if isinstance(crop, str) else "Maïs", 
+            quantity_kg=1000
+        )
+
+        # Retourner les mises à jour du state
+        return {
+            "global_alerts": new_alerts,
+            "meteo_data": {**raw_weather, "diagnosis": meteo_diag},
+            "market_data": market_analysis
         }
+
+    def generate_report(self, state: GlobalAgriState) -> Dict[str, Any]:
+        """Agrège tout en un bulletin de guerre quotidien."""
+        logger.info("--- NODE: GENERATING WAR ROOM REPORT ---")
+        
+        zone = state.get("zone_id", "Ouagadougou")
+        meteo_data = state.get("meteo_data") or {}
+        market_data = state.get("market_data") or {}
+        alerts = state.get("global_alerts") or []
+        
+        diag = meteo_data.get("diagnosis", {})
+        
+        # Extraction contextuelle
+        data_summary = {
+            "community_alerts": [a["message"] for a in alerts],
+            "meteo_risks": diag.get("alerts_critiques", []),
+            "market_advice": market_data.get("conseil", "Surveiller les prix")
+        }
+        
+        context_str = json.dumps(data_summary, indent=2, ensure_ascii=False, default=str)
+        is_sms = state.get("is_sms_mode", False)
         
         if self.llm:
             system_prompt = (
-                "Tu es le rédacteur en chef d'AgConnect Flash. Ton but est de protéger et d'enrichir l'agriculteur.\n"
-                "RÈGLES DE RÉDACTION :\n"
-                "1. TON : Fraternel, direct, expert.\n"
-                "2. PRIORITÉ : Si le risque d'inondation est Élevé/Critique, commence par '🚨 ALERTE ROUGE'.\n"
-                "3. ÉCONOMIE : Interprète les prix (ex: 'Le prix du maïs grimpe, attendez avant de vendre').\n"
-                "4. ACTION : Donne un conseil pratique basé sur la météo du jour."
+                f"Tu es 'AgriConnect Sentinelle', le gardien de la zone {zone}. "
+                "Rédige le bulletin quotidien pour les agriculteurs.\n\n"
+                "STRUCTURE DU BULLETIN (Doit tenir dans ~300 caractères si possible) :\n"
+                "1. 🚨 SÉCURITÉ D'ABORD : Commence par les alertes (Météo ou Communautaires). Si danger = impératif.\n"
+                "2. 🚜 ACTION AUX CHAMPS : Résume les interdictions techniques (Pas d'engrais, etc).\n"
+                "3. 💰 ARGENT : Donne le conseil Warrantage (ex: 'Gain +50000F si tu stockes').\n\n"
+                "TON : Urgent, Protecteur, Chiffré."
             )
             
             try:
                 response = self.llm.invoke([
                     SystemMessage(content=system_prompt),
-                    HumanMessage(content=f"Données brutes : {json.dumps(context, ensure_ascii=False)}")
+                    HumanMessage(content=f"SITUATION DU JOUR :\n{context_str}")
                 ])
                 report_content = response.content
             except Exception as e:
-                logger.error(f"Échec LLM : {e}")
-                report_content = self._fallback_report(context)
+                report_content = "Erreur génération bulletin."
         else:
-            report_content = self._fallback_report(context)
+            # Fallback manuel robuste
+            report_content = f"Bulletin {zone} :\n"
+            if data_summary["community_alerts"]:
+                report_content += f"🚨 COMMUNAUTÉ: {data_summary['community_alerts'][0]}\n"
+            
+            weather_risks = diag.get('alerts_critiques', [])
+            if weather_risks:
+                report_content += f"⚠️ METEO: {weather_risks[0]['target']} - {weather_risks[0]['reason']}\n"
+            
+            report_content += f"💰 WARANTAGE: {data_summary['market_advice']}"
 
-        # Logique de priorité pour le canal d'envoi (SMS vs Notification)
-        priority = "URGENT" if context["risque_inondation"].get("risk_level") in ["Élevé", "Critique"] else "NORMAL"
+        # --- PILIER 4: SCALABILITÉ (ADAPTATION SMS) ---
+        if is_sms:
+            report_content = SMSAdapter.compress_for_sms(report_content)
+
+        # Calcul priorité pour push
+        is_urgent = len(alerts) > 0 or len(diag.get("alerts_critiques", [])) > 0
 
         return {
-            "final_report": {"content": report_content, "priority": priority}
+            "final_report": {
+                "content": report_content, 
+                "priority": "URGENT" if is_urgent else "NORMAL",
+                "channel": "SMS" if is_sms else "APP"
+            }
         }
-
-    def _fallback_report(self, context: Dict) -> str:
-        """Template de secours en cas de panne du LLM."""
-        return f"📢 FLASH AGCONNECT - {context['zone']}\n\nMétéo: {context['meteo']['condition']} ({context['meteo']['temp_max']}°C)\nRisque Inondation: {context['risque_inondation']['risk_level']}\nMarché: {len(context['marche'])} cultures suivies."
 
     def build_graph(self):
         """Compile le workflow LangGraph."""

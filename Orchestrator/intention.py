@@ -19,11 +19,11 @@ logger = logging.getLogger("IntentClassifier")
 
 class IntentOutput(BaseModel):
     """Schéma de sortie strict pour assurer la compatibilité avec l'orchestrateur."""
-    intent: str = Field(description="L'intention détectée parmi : METEO, CROP, SOIL, HEALTH, SUBSIDY, UNKNOWN")
+    intent: str = Field(description="L'intention détectée parmi : METEO, CROP, SOIL, HEALTH, SUBSIDY, REPORT, UNKNOWN")
     confidence: float = Field(description="Score de confiance entre 0 et 1.")
     reasoning: Optional[str] = Field(description="Brève explication du choix.")
 
-INTENTS = ["METEO", "CROP", "SOIL", "HEALTH", "SUBSIDY", "UNKNOWN"]
+INTENTS = ["METEO", "CROP", "SOIL", "HEALTH", "SUBSIDY", "REPORT", "UNKNOWN"]
 
 SYSTEM_PROMPT = """
 Tu es l'expert en classification d'intentions d'AgriConnect Burkina. 
@@ -35,6 +35,7 @@ LISTE DES SERVICES :
 - SOIL : Techniques de récupération des terres (Zaï, demi-lunes), pH, compost.
 - HEALTH : Identification des insectes (chenille légionnaire), maladies (jaunisse), traitements bio-pesticides.
 - SUBSIDY : Prix officiels des intrants, subventions gouvernementales, alertes aux fraudes/arnaques SMS.
+- REPORT : L'utilisateur signale un problème sur le terrain (invasion, inondation, maladie visible, prix abusif). C'est une information REMONTANTE.
 - UNKNOWN : Salutations ou questions non agricoles.
 
 CONSIGNE : Réponds UNIQUEMENT avec un JSON valide.

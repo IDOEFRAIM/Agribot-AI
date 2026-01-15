@@ -72,7 +72,9 @@ class SahelAgriAdvisor:
     def get_daily_diagnosis(self, crop_key: str, soil: SoilType, 
                             t_min: float, t_max: float, rh: float, 
                             precip: float, doy: int, lat: float,
-                            distance_km: float = 0.0) -> dict:
+                            distance_km: float = 0.0,
+                            wind_speed_kmh: float = 10.0,
+                            rain_prob_next_6h: float = 0.0) -> dict:
         crop = self.crops.get(crop_key.lower())
         if not crop: return {"error": "Culture non reconnue"}
         
@@ -82,6 +84,15 @@ class SahelAgriAdvisor:
         water_balance = round(pe - etc, 2)
         heat_alert = t_max > crop.t_max_optimal
         delta_t, spray_status = self.math.calculate_delta_t(t_max, rh)
+
+        # --- ALERTS OPÉRATIONNELLES (PILIER 3: EXPLICABILITÉ) ---
+        operational_alerts = []
+        if rain_prob_next_6h > 40 or precip > 10:
+            operational_alerts.append({"action": "INTERDIT", "target": "Fertilisation", "reason": f"Pluie imminente ({precip}mm)."})
+        if wind_speed_kmh > 20:
+             operational_alerts.append({"action": "INTERDIT", "target": "Pulvérisation", "reason": f"Vent fort ({wind_speed_kmh} km/h)."})
+        if precip < 5 and water_balance < -2:
+             operational_alerts.append({"action": "DÉCONSEILLÉ", "target": "Semis", "reason": "Sol trop sec."})
 
         inc_rain = 0.0
         needs_ground_check = False
@@ -105,16 +116,27 @@ class SahelAgriAdvisor:
             "pulverisation": spray_status,
             "delta_t": delta_t,
             "distance": distance_km,
-            "recommandations": recos,
+            "recommandations": recos + [a["reason"] for a in operational_alerts],
             "emoji": emoji,
             "confiance": conf_txt,
             "check_terrain": needs_ground_check,
+            "alerts_critiques": operational_alerts,
             "date": datetime.now().strftime("%Y-%m-%d %H:%M")
         }
 
     def _calculate_pe(self, rain: float, soil: SoilType) -> float:
-        coeffs = {SoilType.SABLEUX: 0.5, SoilType.ARGILEUX: 0.7, SoilType.STANDARD: 0.6}
-        return round(rain * coeffs.get(soil, 0.6), 2) if rain > 5 else 0.0
+        # Formule USDA simplifiée
+        p = rain
+        pe = p * (125 - 0.2 * p) / 125 if p <= 250 else 125 + 0.1 * p
+        # Facteur sol : l'argile retient mieux l'eau utile que le sable
+        factors = {
+            SoilType.SABLEUX: 0.6,
+            SoilType.ARGILEUX: 0.9,
+            SoilType.LIMONNEUX: 0.8,
+            SoilType.FERRUGINEUX: 0.7,
+            SoilType.STANDARD: 0.75
+        }
+        return pe * factors.get(soil, 0.75)
 
 class AgentState(TypedDict):
     user_query: str

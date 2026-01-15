@@ -6,26 +6,94 @@ from typing import Optional, Dict, Any
 
 from orchestrator.main_orchestrator import MainOrchestrator
 from orchestrator.state import GlobalAgriState
-
+from utils.sms_adapter import SMSAdapter
+# Import du système de Queue (Celery)
+# Note: Si Celery n'est pas lancé, assurez-vous de gérer l'erreur ou d'avoir un fallback
+try:
+    from backend.worker import process_user_query
+    ASYNC_AVAILABLE = True
+except ImportError:
+    ASYNC_AVAILABLE = False
+    
 # Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("AgConnectAPI")
 
 app = FastAPI(title="AgConnect API", description="Agricultural Assistant Backend", version="1.0.0")
 
-# Initialize Orchestrator
+# Initialize Direct Orchestrator (Fallback Synchrone)
 try:
     orchestrator_instance = MainOrchestrator()
-    logger.info("✅ Orchestrator initialized successfully.")
+    logger.info("✅ Orchestrator (Direct) initialized successfully.")
 except Exception as e:
     logger.error(f"❌ Failed to initialize Orchestrator: {e}")
-    raise e
+    # En prod, on ne raise pas forcément si on compte sur le worker, mais pour le dev, c'est mieux
+    # raise e 
 
 class UserRequest(BaseModel):
     user_id: str = "user_123"
     zone_id: str = "Centre"
     query: Optional[str] = ""
     flow_type: str = "MESSAGE" # MESSAGE or REPORT
+    async_mode: bool = False # Option pour forcer le mode async
+
+class SMSData(BaseModel):
+    from_number: str
+    text: str
+
+@app.post("/api/v1/sms/hook")
+async def sms_webhook(data: SMSData):
+    """
+    Endpoint SMS Asynchrone (Pilier 4 - Scalabilité).
+    Accepte : { "from_number": "+226...", "text": "PLUIE OUAGA" }
+    """
+    logger.info(f"📱 SMS received from {data.from_number}: {data.text}")
+    
+    # 1. Adaptateur
+    formatted = SMSAdapter.format_incoming_sms(data.text, data.from_number)
+    
+    # 2. State
+    state: GlobalAgriState = {
+        "requete_utilisateur": formatted["query"],
+        "zone_id": "unknown", 
+        "user_id": formatted["user_id"],
+        "flow_type": "MESSAGE",
+        "is_sms_mode": True,
+        "user_reliability_score": 0.5
+    }
+    
+    # 3. Mode Asynchrone (Recommandé pour la charge)
+    if ASYNC_AVAILABLE:
+        # On met le message dans la file d'attente Redis/SQS
+        task = process_user_query.delay(state)
+        logger.info(f"🚀 Tâche envoyée au worker: {task.id}")
+        return {"status": "RECEIVED", "task_id": task.id, "message": "Traitement en cours... Vous recevrez un SMS."}
+    
+    # 4. Fallback Synchrone (Si pas de worker lancé)
+    try:
+        result = orchestrator_instance.run(state)
+        response_text = result.get("final_response", "Erreur système.")
+        sms_response = SMSAdapter.compress_for_sms(response_text)
+        return {"message": sms_response}
+    except Exception as e:
+        logger.error(f"Sync Processing Error: {e}")
+        return {"message": "Service indisponible."}
+        "flow_type": "MESSAGE",
+        "is_sms_mode": True,
+        "user_reliability_score": 0.5
+    }
+    
+    # 3. Execution
+    try:
+        result = orchestrator_instance.run(state)
+        response_text = result.get("final_response", "Erreur système.")
+        
+        # 4. Compression
+        sms_response = SMSAdapter.compress_for_sms(response_text)
+        return {"message": sms_response} # Twilio/AfricasTalking attendent souvent du XML ou PlainText, ici JSON pour standard
+    except Exception as e:
+        logger.error(f"SMS Processing Error: {e}")
+        return {"message": "Service indisponible. Réessayez plus tard."}
 
 @app.post("/api/v1/ask")
 async def ask_agent(req: UserRequest):
