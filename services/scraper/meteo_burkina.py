@@ -11,7 +11,7 @@ import io
 logger = logging.getLogger("Scraper.MeteoBurkina")
 
 try:
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
     HAS_PYPDF2 = True
 except ImportError:
     HAS_PYPDF2 = False

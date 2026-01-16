@@ -6,7 +6,7 @@ from typing import TypedDict, Dict, Any, Optional, List
 # --- Importations LangGraph & LangChain ---
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 from tools.meteo.basis_tools import SahelAgriAdvisor, SoilType
 from tools.meteo.flood_risk import FloodRiskTool
 

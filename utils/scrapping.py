@@ -2,7 +2,7 @@ import requests
 from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 import io
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 
 def check_robots_txt(url: str) -> dict:
     """Analyse le fichier robots.txt du site."""

@@ -30,7 +30,8 @@ class TestOrchestratorIntegration(unittest.TestCase):
         result = self.orchestrator.run(msg_state_meteo)
         
         self.assertIsInstance(result, dict)
-        self.assertIn("execution_time_ms", result)
+        self.assertIn("metadata", result)
+        self.assertIn("execution_time_ms", result["metadata"])
         # We expect a final_response or at least an updated state
         self.assertIn("execution_path", result)
 

@@ -13,11 +13,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("DocumentScraper")
 
 try:
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
     PdfReader = True
 except Exception as e:
     PdfReader = False
-    logger.warning(f'Nous n avons pas pu importer pypdf2 du a cette erreur:{e}')
+    logger.warning(f'Nous n avons pas pu importer pypdf du a cette erreur:{e}')
 
 
 

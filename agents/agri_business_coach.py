@@ -6,7 +6,7 @@ from datetime import datetime
 # --- Importations LangGraph & LangChain ---
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 
 # --- IMPORTATION DES OUTILS ---
 # Assure-toi que le chemin correspond bien à l'emplacement de ton fichier Tool corrigé

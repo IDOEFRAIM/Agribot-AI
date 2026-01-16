@@ -13,11 +13,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger("DocumentScraper")
 
 try:
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
     HAS_PYPDF2 = True
 except ImportError:
     HAS_PYPDF2 = False
-    logger.warning("PyPDF2 n'est pas installé. L'extraction de contenu PDF sera limitée.")
+    logger.warning("pypdf n'est pas installé. L'extraction de contenu PDF sera limitée.")
 
 class DocumentScraper:
     """

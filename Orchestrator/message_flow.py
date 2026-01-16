@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any
 from langgraph.graph import StateGraph, END
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
 from orchestrator.state import GlobalAgriState
 from services.utils.cache import StorageManager
@@ -164,7 +164,7 @@ class MessageResponseFlow:
         # Définition des nœuds
         # On garde les nœuds principaux pour le test
         workflow.add_node("meteo_node", self.run_meteo)
-        workflow.add_node("market_node", self.run_market)
+        workflow.add_node("market_node", self.market_node)
         workflow.add_node("synthesizer_node", self.synthesize_answer)
         
         # MODE TEST : On force le passage par Météo puis Marché
