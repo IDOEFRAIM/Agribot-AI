@@ -15,7 +15,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 
 # Importer tes services (adapter si signatures différentes)
-from services.scraper import DocumentScraper, WeatherForecastService, SonagessScraper
+from services.scraper import DocumentScraper, WeatherForecastService, SonagessScraper, MeteoBurkinaScraper
 
 # Logger
 logger = logging.getLogger("scraper.orchestrator")
@@ -75,6 +75,7 @@ class ScraperOrchestrator:
         # Instancier les services (adapter les signatures si besoin)
         self.document_scraper = DocumentScraper(headless=headless)
         self.weather_service = WeatherForecastService(headless=headless)
+        self.meteo_burkina_scraper = MeteoBurkinaScraper()
         self.sonagess_scraper = SonagessScraper(
             start_url=getattr(config, "START_URL", config.START_URL),
             download=True,
@@ -134,6 +135,7 @@ class ScraperOrchestrator:
         tasks = {
             "document_scraper": (self.document_scraper.scrape_bulletins, ()),
             "weather_service": (self.weather_service.scrape_forecast, ()),
+            "meteo_burkina": (self.meteo_burkina_scraper.run, ()),
             "sonagess_scraper": (self.sonagess_scraper.run, ()),
         }
 

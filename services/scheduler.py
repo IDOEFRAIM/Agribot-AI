@@ -40,10 +40,18 @@ def run_morning_alerts():
                 "user_id": sub["user_id"],
                 "crop": sub["crop"],
                 "is_sms_mode": sub["sms"],
+                "user_reliability_score": 0.8,
+                "requete_utilisateur": None,
                 "flow_type": "REPORT",
                 "global_alerts": [],
-                "meteo_data": None, # Le flow va chercher les défaults ou on pourrait injecter ici
-                "execution_path": []
+                "meteo_data": None,
+                "market_data": None,
+                "soil_data": None,
+                "health_data": None,
+                "health_raw_data": None,
+                "execution_path": [],
+                "final_report": None,
+                "final_response": None
             }
             
             # 2. Exécution du flux de danger

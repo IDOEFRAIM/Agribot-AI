@@ -51,7 +51,8 @@ class DailyReportFlow:
         for e in recent_events:
             if e["severity"] in ["HIGH", "CRITICAL"]:
                 sev = Severity.CRITICAL if e["severity"] == "CRITICAL" else Severity.HIGH
-                new_alerts.append(Alert(source="communauté", message=e["description"], severity=sev))
+                # TypedDict ne s'instancie pas, on utilise un dict literal typé implicitement
+                new_alerts.append({"source": "communauté", "message": e["description"], "severity": sev})
 
         # 1b. INTELLIGENCE EXTERNE (Vector Store - Scraping Inondations/Feux/Conflits)
         # Recherche directe dans les métadonnées pour les alertes récentes type "METEO_ALERT"
@@ -69,7 +70,7 @@ class DailyReportFlow:
                 content = alert.get("text") or alert.get("content", "Alerte détectée sans détails")
                 # Éviter les doublons exacts
                 if not any(a["message"] == content for a in new_alerts):
-                    new_alerts.append(Alert(source="sentinelle_web", message=f"WEB: {content[:100]}...", severity=Severity.HIGH))
+                    new_alerts.append({"source": "sentinelle_web", "message": f"WEB: {content[:100]}...", "severity": Severity.HIGH})
                     logger.warning(f"🚨 ALERTE WEB DETECTÉE: {content}")
         except Exception as e:
             logger.error(f"Erreur lecture Vector Store pour alertes: {e}")
