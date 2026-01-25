@@ -1,0 +1,98 @@
+[
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "content_preview",
+    "summary": "Données climatiques extraites pour Bobo Dioulasso (t_min, t_max, précip)."
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "full_data",
+    "summary": "{\"city\": \"Bobo Dioulasso\", \"t_min\": [19.1, 22, 24.7, 25.2, 24.2, 22.7, 21.8, 21.5, 21.5, 22.1, 21.4, 19.3], \"t_max\": [32.9, 35.7, 37.6, 37.2, 35.2, 32.5, 30.4, 29.6, 30.8, 33.3, 34.7, 33.4], \"precip\": [0.7, 1.7, 17.1, 53.7, 98.3, 132.6, 207.3, 269, 195.5, 71.6, 5.8, 0.7], \"source_url\": \"https://meteoburkina.bf/le-climat-de-nos-villes/\"}"
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "content_preview",
+    "summary": "Données climatiques extraites pour Boromo (t_min, t_max, précip)."
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "full_data",
+    "summary": "{\"city\": \"Boromo\", \"t_min\": [17, 20.1, 24.3, 26.6, 26.1, 24.2, 22.9, 22.5, 22.5, 22.8, 19.3, 17], \"t_max\": [34.1, 37, 39.6, 39.7, 37.9, 35, 32.3, 31.1, 32.3, 35.4, 36.8, 34.9], \"precip\": [0.8, 1, 5.3, 42.6, 79.7, 118.9, 200.4, 261.2, 157.8, 52.9, 1.5], \"source_url\": \"https://meteoburkina.bf/le-climat-de-nos-villes/\"}"
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "content_preview",
+    "summary": "Données climatiques extraites pour Dédougou (t_min, t_max, précip)."
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "full_data",
+    "summary": "{\"city\": \"Dédougou\", \"t_min\": [17.7, 20.8, 24.5, 26.9, 26.6, 24.5, 22.9, 22.3, 22.3, 22.8, 20.5, 18.2], \"t_max\": [33.9, 36.9, 39.7, 40.4, 38.8, 35.5, 32.6, 31.1, 32.9, 36.4, 37.2, 34.9], \"precip\": [0.1, 0.4, 6, 23.6, 65.4, 108, 190.1, 255.9, 146, 45.2, 1.5], \"source_url\": \"https://meteoburkina.bf/le-climat-de-nos-villes/\"}"
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "content_preview",
+    "summary": "Données climatiques extraites pour Dori (t_min, t_max, précip)."
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "full_data",
+    "summary": "{\"city\": \"Dori\", \"t_min\": [15.5, 18.4, 22.6, 26.7, 28.8, 27.2, 25, 24.1, 24.8, 24.8, 19.4, 16.1], \"t_max\": [32.6, 36, 40, 42.4, 41.8, 38.8, 35.6, 33.7, 35.9, 38.9, 37.6, 33.9], \"precip\": [0.3, null, 2.7, 4.8, 25.7, 68.3, 127.9, 186.9, 73.8, 16.7], \"source_url\": \"https://meteoburkina.bf/le-climat-de-nos-villes/\"}"
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "content_preview",
+    "summary": "Données climatiques extraites pour Fada N'Gourma (t_min, t_max, précip)."
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "full_data",
+    "summary": "{\"city\": \"Fada N'Gourma\", \"t_min\": [15.5, 18.4, 22.6, 26.7, 28.8, 27.2, 25, 24.1, 24.8, 24.8, 19.4, 16.1], \"t_max\": [32.6, 36, 40, 42.4, 41.8, 38.8, 35.6, 33.7, 35.9, 38.9, 37.6, 33.9], \"precip\": [0.3, null, 2.7, 4.8, 25.7, 68.3, 127.9, 186.9, 73.8, 16.7], \"source_url\": \"https://meteoburkina.bf/le-climat-de-nos-villes/\"}"
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "content_preview",
+    "summary": "Données climatiques extraites pour Gaoua (t_min, t_max, précip)."
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "full_data",
+    "summary": "{\"city\": \"Gaoua\", \"t_min\": [15.5, 18.4, 22.6, 26.7, 28.8, 27.2, 25, 24.1, 24.8, 24.8, 19.4, 16.1], \"t_max\": [32.6, 36, 40, 42.4, 41.8, 38.8, 35.6, 33.7, 35.9, 38.9, 37.6, 33.9], \"precip\": [0.3, null, 2.7, 4.8, 25.7, 68.3, 127.9, 186.9, 73.8, 16.7], \"source_url\": \"https://meteoburkina.bf/le-climat-de-nos-villes/\"}"
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "content_preview",
+    "summary": "Données climatiques extraites pour Ouahigouya (t_min, t_max, précip)."
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "full_data",
+    "summary": "{\"city\": \"Ouahigouya\", \"t_min\": [15.5, 18.4, 22.6, 26.7, 28.8, 27.2, 25, 24.1, 24.8, 24.8, 19.4, 16.1], \"t_max\": [32.6, 36, 40, 42.4, 41.8, 38.8, 35.6, 33.7, 35.9, 38.9, 37.6, 33.9], \"precip\": [0.3, null, 2.7, 4.8, 25.7, 68.3, 127.9, 186.9, 73.8, 16.7], \"source_url\": \"https://meteoburkina.bf/le-climat-de-nos-villes/\"}"
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "content_preview",
+    "summary": "Données climatiques extraites pour Pô (t_min, t_max, précip)."
+  },
+  {
+    "source_file": "weather_service_latest.json",
+    "identifier": "results",
+    "field": "full_data",
+    "summary": "{\"city\": \"Pô\", \"t_min\": [15.5, 18.4, 22.6, 26.7, 28.8, 27.2, 25, 24.1, 24.8, 24.8, 19.4, 16.1], \"t_max\": [32.6, 36, 40, 42.4, 41.8, 38.8, 35.6, 33.7, 35.9, 38.9, 37.6, 33.9], \"precip\": [0.3, null, 2.7, 4.8, 25.7, 68.3, 127.9, 186.9, 73.8, 16.7], \"source_url\": \"https://meteoburkina.bf/le-climat-de-nos-villes/\"}"
+  }
+]

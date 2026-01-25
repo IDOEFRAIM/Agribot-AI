@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
-from orchestrator.main_orchestrator import MainOrchestrator
+from orchestrator.message_flow import MessageResponseFlow
 from orchestrator.state import GlobalAgriState
 from utils.sms_adapter import SMSAdapter
 # Import du système de Queue (Celery)
@@ -23,7 +23,7 @@ app = FastAPI(title="AgConnect API", description="Agricultural Assistant Backend
 
 # Initialize Direct Orchestrator (Fallback Synchrone)
 try:
-    orchestrator_instance = MainOrchestrator()
+    orchestrator_instance = MessageResponseFlow()
     logger.info("✅ Orchestrator (Direct) initialized successfully.")
 except Exception as e:
     logger.error(f"❌ Failed to initialize Orchestrator: {e}")
@@ -55,7 +55,7 @@ async def sms_webhook(data: SMSData):
     # 2. State
     state: GlobalAgriState = {
         "requete_utilisateur": formatted["query"],
-        "zone_id": "unknown", 
+        "zone_id": "boromo", 
         "user_id": formatted["user_id"],
         "flow_type": "MESSAGE",
         "is_sms_mode": True,
@@ -78,22 +78,6 @@ async def sms_webhook(data: SMSData):
     except Exception as e:
         logger.error(f"Sync Processing Error: {e}")
         return {"message": "Service indisponible."}
-        "flow_type": "MESSAGE",
-        "is_sms_mode": True,
-        "user_reliability_score": 0.5
-    }
-    
-    # 3. Execution
-    try:
-        result = orchestrator_instance.run(state)
-        response_text = result.get("final_response", "Erreur système.")
-        
-        # 4. Compression
-        sms_response = SMSAdapter.compress_for_sms(response_text)
-        return {"message": sms_response} # Twilio/AfricasTalking attendent souvent du XML ou PlainText, ici JSON pour standard
-    except Exception as e:
-        logger.error(f"SMS Processing Error: {e}")
-        return {"message": "Service indisponible. Réessayez plus tard."}
 
 @app.post("/api/v1/ask")
 async def ask_agent(req: UserRequest):
@@ -114,7 +98,7 @@ async def ask_agent(req: UserRequest):
         "market_data": {},
         "user_profile": {"id": req.user_id}
     }
-    
+    print(f"ZONE_ID:{req.zone_id}")
     try:
         # Run Orchestrator
         result = orchestrator_instance.run(initial_state)

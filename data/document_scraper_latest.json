@@ -2,21 +2,15 @@
   "status": "SUCCESS",
   "results": [
     {
-      "url": "https://meteoburkina.bf/produits/bulletin-clima-sante/",
+      "url": "https://meteoburkina.bf/produits/bulletin-agrometeorologique-mensuel/",
       "type": "html",
-      "title": "Bulletin Vague de chaleur",
+      "title": "Bulletin agrométéorologique mensuel",
       "content": "AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback LangueFrenchEnglishSpanishArabicChinese FrenchEnglishSpanishArabicChinese"
     },
     {
-      "url": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/",
+      "url": "https://meteoburkina.bf/produits/bulletin-mensuel/",
       "type": "html",
-      "title": "Bulletin agrométéologique décadaire",
-      "content": "AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback LangueFrenchEnglishSpanishArabicChinese FrenchEnglishSpanishArabicChinese"
-    },
-    {
-      "url": "https://meteoburkina.bf/produits/bulletin-hebdomadaire/",
-      "type": "html",
-      "title": "Bulletin hebdomadaire",
+      "title": "Bulletin mensuel",
       "content": "AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback LangueFrenchEnglishSpanishArabicChinese FrenchEnglishSpanishArabicChinese"
     },
     {
@@ -26,9 +20,15 @@
       "content": "AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback LangueFrenchEnglishSpanishArabicChinese FrenchEnglishSpanishArabicChinese"
     },
     {
-      "url": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n36-valable-du-1er-au-10-janvier-2026/",
+      "url": "https://meteoburkina.bf/produits/bulletin-eau-energie/",
       "type": "html",
-      "title": "Bulletin agrométéorologique décadaire N°36 (valable du 1er au 10 janvier 2026)",
+      "title": "Bulletin eau énergie",
+      "content": "AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback LangueFrenchEnglishSpanishArabicChinese FrenchEnglishSpanishArabicChinese"
+    },
+    {
+      "url": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/",
+      "type": "html",
+      "title": "Bulletin agrométéorologique décadaire N°01 (valable du 11 au 20 janvier 2026)",
       "content": "AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback AlertesSubscribeLangueFrenchEnglishSpanishArabicChineseRechercheContact usFeedback LangueFrenchEnglishSpanishArabicChinese FrenchEnglishSpanishArabicChinese"
     }
   ],

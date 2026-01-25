@@ -11,7 +11,7 @@ def query_backend(user_query, user_id, zone_id, mode):
     
     payload = {
         "user_id": user_id or "user_gradio",
-        "zone_id": zone_id or "Centre",
+        "zone_id": zone_id or "boromo",
         "query": user_query,
         "flow_type": flow_type
     }
@@ -42,7 +42,7 @@ with gr.Blocks(title="AgConnect - Assistant") as demo:
     with gr.Row():
         with gr.Column(scale=1):
             user_id = gr.Textbox(label="User ID", value="farmer_001")
-            zone_id = gr.Dropdown(choices=["Centre", "Nord", "Sud"], value="Centre", label="Zone")
+            zone_id = gr.Dropdown(choices=["Centre", "Nord", "Sud","Boromo"], value="Centre", label="Zone")
             mode = gr.Radio(choices=["Conversation", "Daily Report"], value="Conversation", label="Mode")
         
         with gr.Column(scale=2):

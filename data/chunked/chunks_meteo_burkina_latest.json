@@ -1,0 +1,68 @@
+[
+  {
+    "chunk_id": "https://meteoburkina.bf/produits/bulletin-quotidien/bulletin-meteo-du-20-d%C3%A9cembre-2025/_v0",
+    "text_content": "Télécharger en PDF Bulletin du 20 Décembre 2025 à 12h00 Télécharger en PDF Bulletin du 20 Décembre 2025 à 12h00 Nos services Nos produits Organisation DONNÉES ET OUTILS © Agence Nationale de la Météorologie du Burkina Faso (ANAM-BF) 2026",
+    "source_file": "meteo_burkina_latest.json",
+    "identifier": "https://meteoburkina.bf/produits/bulletin-quotidien/bulletin-meteo-du-20-d%C3%A9cembre-2025/",
+    "processed_at": "",
+    "metadata": {
+      "chunk_index": 0,
+      "total_chunks": 1
+    }
+  },
+  {
+    "chunk_id": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/_v0",
+    "text_content": "Bulletin agrométéorologique décadaire N°01 (valable du 11 au 20 janvier 2026)",
+    "source_file": "meteo_burkina_latest.json",
+    "identifier": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/",
+    "processed_at": "",
+    "metadata": {
+      "chunk_index": 0,
+      "total_chunks": 1
+    }
+  },
+  {
+    "chunk_id": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/_v0",
+    "text_content": "[MÉTÉO] Conditions météorologiques du 13 au 19 janvier 2026 • Vents : d’harmattan faible s a modéré s avec des vents soufflant par moments en rafales",
+    "source_file": "meteo_burkina_latest.json",
+    "identifier": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/",
+    "processed_at": "",
+    "metadata": {
+      "chunk_index": 0,
+      "total_chunks": 4
+    }
+  },
+  {
+    "chunk_id": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/_v1",
+    "text_content": "[CONSEILS] Avis et conseils agrométéorologiques 5 BURKINA FASO La Patrie ou la Mort, nous Vaincrons AGENCE NATIONALE DE LA METEOROLOGIE No 01 période du 01 au 10 janvier 2026 Sommaire : •Globalement, h ausse modérée à importante des températures minimales • Hausse modérée à importante des humidités relatives sur la majeure partie du pays • Baisse modérée des évaporations par rapport à la décade précédente • variation légère à hausse de la demande climatique prévue • Autour de la période du 18",
+    "source_file": "meteo_burkina_latest.json",
+    "identifier": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/",
+    "processed_at": "",
+    "metadata": {
+      "chunk_index": 1,
+      "total_chunks": 4
+    }
+  },
+  {
+    "chunk_id": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/_v2",
+    "text_content": "climatique prévue • Autour de la période du 18 au 19 janvier, pluies prévues BULLETIN AGROMETEOROLOGIQUE DECADAIRE BULLETIN Réf : ANAM/PAM/PR_10/BN_01/V00 Date : 29 octobre 2024 AGROMETEOROLOGIQUE DECADAIRE Page : 2/5 dans l es région s du Djôro, du Guiriko, du Bankui, du nando, du Nazinon , du Nakambé et le Sud du Oubri et du Kadiogo où elles sont en baisse importante (Figure 3) Figure 3 : Anomalie des humidités maximales de la décade par rapport à la décade précédente • Minimales : entre 8 %",
+    "source_file": "meteo_burkina_latest.json",
+    "identifier": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/",
+    "processed_at": "",
+    "metadata": {
+      "chunk_index": 2,
+      "total_chunks": 4
+    }
+  },
+  {
+    "chunk_id": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/_v3",
+    "text_content": "à la décade précédente • Minimales : entre 8 % à Boussouma (Sandbond tenga ) et 29 % à Sidéradougou (Comoé)",
+    "source_file": "meteo_burkina_latest.json",
+    "identifier": "https://meteoburkina.bf/produits/bulletin-agrometeologique-decadaire/bulletin-agrom%C3%A9t%C3%A9orologique-d%C3%A9cadaire-n01-valable-du-11-au-20-janvier-2026/",
+    "processed_at": "",
+    "metadata": {
+      "chunk_index": 3,
+      "total_chunks": 4
+    }
+  }
+]

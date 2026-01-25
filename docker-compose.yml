@@ -1,0 +1,17 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    container_name: agri_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: agri_user
+      POSTGRES_PASSWORD: agri_pass
+      POSTGRES_DB: agri_weather
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+volumes:
+  postgres_data:
+    driver: local
