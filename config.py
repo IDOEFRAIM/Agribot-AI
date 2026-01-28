@@ -41,7 +41,7 @@ SLEEP: float = 0.4
 MAX_DEPTH: int = 1
 MAX_PAGES: int = 200
 OUTPUT_DIR: str = "sonagess_pdfs"
-CHECKPOINT_FILE: str = "sonagess_checkpoint.json"
+CHECKPOINT_FILE: str = "backend/sources/raw_data/sonagess_checkpoint.json"
 DOWNLOAD_WORKERS: int = 4
 SCRAPER_USER_AGENT: str = "Mozilla/5.0 (compatible; SonagessScraper/1.0)"
 
@@ -50,7 +50,7 @@ SCRAPER_USER_AGENT: str = "Mozilla/5.0 (compatible; SonagessScraper/1.0)"
 # ====================================================================
 
 # Dossier de sortie principal pour tous les rapports
-BASE_OUTPUT_DIR: str = os.path.join(BASE_DIR, "rapports_scraping")
+BASE_OUTPUT_DIR: str = os.path.join(BASE_DIR, "backend/sources/rapports_scraping")
 # Dossier pour les captures d'écran (cartes, preuves visuelles)
 CAPTURES_DIR: str = os.path.join(BASE_OUTPUT_DIR, "visuels_satellite")
 # Dossier pour les données brutes GeoJSON ou les réponses Fanfar interceptées

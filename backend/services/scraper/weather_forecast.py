@@ -64,8 +64,16 @@ class WeatherForecastService:
     Service pour scraper les données météo par ville en utilisant Playwright.
     Extrait les données climatiques (températures, précipitations) depuis les graphiques Highcharts.
     """
-
-    def __init__(self, config: dict, logger=None):
+    DEFAULT_CONFIG = {
+        "BASE_URL": "https://meteoburkina.bf/le-climat-de-nos-villes/",
+        "PLAYWRIGHT_TIMEOUT": 60000,  # ms
+        "HEADLESS": True,
+        "SELECTOR_CITY": "#city_select",
+        "WAIT_CITY_SELECTOR": 15000,  # ms
+        "WAIT_GRAPH_UPDATE": 2000,    # ms
+        "LOG_FILE": "weather_forecast_orchestrator.log",
+    }
+    def __init__(self, config: dict=DEFAULT_CONFIG, logger=None):
         self.config = config.copy()
         self.headless = self.config["HEADLESS"]
         self.structured_forecasts: List[Dict[str, Any]] = []
@@ -219,32 +227,82 @@ class WeatherForecastService:
                 "message": f"{len(self.structured_forecasts)} villes collectées.",
                 "results": self.structured_forecasts
             }
+    def insert_to_postgres(self, data: list):
+        import psycopg2
+        from psycopg2.extras import Json
+        
+        # Utilise des variables d'environnement en prod !
+        DB_PARAMS = {
+            'host': os.getenv('DB_HOST', 'localhost'),
+            'dbname': os.getenv('DB_NAME', 'agriconnect'),
+            'user': os.getenv('DB_USER', 'postgres'),
+            'password': os.getenv('DB_PASS', 'postgres')
+        }
 
+        query = """
+            INSERT INTO weather_forecast (city, title, content, raw_data, url, type, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (city, title) 
+            DO UPDATE SET 
+                content = EXCLUDED.content,
+                raw_data = EXCLUDED.raw_data,
+                updated_at = NOW();
+        """
 
-# --- Point d'entrée CLI ---
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Orchestrateur de scraping météo (WeatherForecastService)")
-    parser.add_argument('--headless', action='store_true', default=True, help='Mode headless pour le navigateur (par défaut: True)')
-    parser.add_argument('--output', type=str, default="weather_forecast_results.json", help='Fichier de sortie JSON')
-    parser.add_argument('--timeout', type=int, default=None, help='Timeout Playwright (ms)')
-    parser.add_argument('--base_url', type=str, default=None, help='URL cible à scraper')
-    parser.add_argument('--wait_city_selector', type=int, default=None, help='Timeout attente menu ville (ms)')
-    parser.add_argument('--wait_graph_update', type=int, default=None, help='Timeout attente update graphique (ms)')
-    args = parser.parse_args()
+        try:
+            with psycopg2.connect(**DB_PARAMS) as conn:
+                with conn.cursor() as cur:
+                    # Préparation des données pour une exécution groupée (plus rapide)
+                    values = [
+                        (
+                            entry.get('metadata', {}).get('city'),
+                            entry.get('title'),
+                            entry.get('content'),
+                            Json(entry.get('metadata', {}).get('raw_data')),
+                            entry.get('url'),
+                            entry.get('type')
+                        ) for entry in data
+                    ]
+                    # Utilisation de executemany pour la performance
+                    cur.executemany(query, values)
+                    conn.commit()
+        except Exception as e:
+            self.logger.error(f"Erreur SQL critique : {e}")
+            raise # On remonte l'erreur pour que le worker sache qu'il a échoué     
+          
+    def execute_production_sync(self, output_json: str = "backend/sources/raw_data/weather_forecast_results.json") -> Dict[str, Any]:
+        """
+        Méthode pour la production : exécute le scraping, sauvegarde en JSON et insère en base PostgreSQL.
+        """
+        self.logger.info("Démarrage du cycle de synchronisation météo production...")
+        start_time = time.time()
+        results = self.run()
+        duration = time.time() - start_time
 
-    config_override = {}
-    if args.timeout is not None:
-        config_override["PLAYWRIGHT_TIMEOUT"] = args.timeout
-    if args.base_url is not None:
-        config_override["BASE_URL"] = args.base_url
-    if args.wait_city_selector is not None:
-        config_override["WAIT_CITY_SELECTOR"] = args.wait_city_selector
-    if args.wait_graph_update is not None:
-        config_override["WAIT_GRAPH_UPDATE"] = args.wait_graph_update
+        # Sauvegarde JSON
+        try:
+            with open(output_json, "w", encoding="utf-8") as f:
+                json.dump(results, f, ensure_ascii=False, indent=2)
+            self.logger.info(f"Résultats sauvegardés dans {output_json}")
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la sauvegarde JSON : {e}")
 
-    orchestrator = WeatherForecastOrchestrator(headless=args.headless, config=config_override)
-    result = orchestrator.run()
-    with open(args.output, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-    print(f"[OK] Résultats sauvegardés dans {args.output}")
+        # Insertion en base PostgreSQL (à adapter selon ton schéma)
+        try:
+            self.insert_to_postgres(results.get("results", []))
+            self.logger.info("Insertion en base PostgreSQL réussie.")
+        except Exception as e:
+            self.logger.error(f"Erreur lors de l'insertion en base PostgreSQL : {e}")
+
+        if results.get("status") == "SUCCESS":
+            self.logger.info(f"Synchronisation réussie en {duration:.2f}s.")
+            return {
+                "timestamp": time.time(),
+                "count": len(results.get("results", [])),
+                "data": results.get("results")
+            }
+        else:
+            self.logger.error(f"Échec de la synchronisation : {results.get('message')}")
+            return results
+    
+    

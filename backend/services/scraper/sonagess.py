@@ -11,17 +11,11 @@ import requests
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
+from pypdf import PdfReader
 # Configuration du logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("SonagessScraper")
 
-try:
-    from pypdf import PdfReader
-    HAS_PYPDF2 = True
-except ImportError:
-    HAS_PYPDF2 = False
-    logger.warning("pypdf n'est pas installé. L'extraction de contenu PDF sera limitée.")
 
 # -------------------------
 # Configuration par défaut
@@ -31,7 +25,7 @@ TIMEOUT = 30
 SLEEP = 0.5
 MAX_DEPTH = 1
 MAX_PAGES = 50  # Réduit pour éviter de scanner tout le site par défaut
-OUTPUT_DIR = "sonagess_pdfs"
+OUTPUT_DIR = "backend/sources/raw_data/sonagess_pdfs"
 CHECKPOINT_FILE = "sonagess_checkpoint.json"
 DOWNLOAD_WORKERS = 4
 USER_AGENT = "Mozilla/5.0 (compatible; SonagessScraper/1.0)"
@@ -312,6 +306,6 @@ class SonagessScraper:
         }
 
 if __name__ == "__main__":
-    scraper = SonagessScraper(max_pages=5) # Limite pour test rapide
+    scraper = SonagessScraper(max_pages=10) # Limite pour test rapide
     result = scraper.run()
     print(json.dumps(result, indent=2, ensure_ascii=False))

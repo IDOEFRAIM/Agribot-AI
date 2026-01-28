@@ -8,7 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.services_orchestrator import ScraperOrchestrator
+from backend.services.scraper.scraper_orchestrator import ScraperOrchestrator
 from services.utils.ingestor import DataIngestor
 from orchestrator.report_flow import DailyReportFlow
 from orchestrator.state import GlobalAgriState
