@@ -1,54 +1,46 @@
-# Utilisation de Python 3.13 comme spécifié dans pyproject.toml
-FROM python:3.13-slim
+# ── AgriConnect Backend ──────────────────────────────────────
+FROM python:3.13-slim AS base
 
-# Métadonnées
 LABEL maintainer="AgConnect Team"
-LABEL description="Agriculture Multi-Agent System with Robust RAG"
+LABEL description="Agriculture Multi-Agent System"
 
-# Variables d'environnement pour Python
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=off \
-    PIP_DISABLE_PIP_VERSION_CHECK=on \
-    POETRY_VERSION=1.8.2
+    PIP_DISABLE_PIP_VERSION_CHECK=on
 
-# Définition du répertoire de travail
 WORKDIR /app
 
-# Installation des dépendances système minimales
-# build-essential pour compiler certaines librairies (numpy, faiss, pandas)
+# Dépendances système
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    git \
+    build-essential curl git \
     && rm -rf /var/lib/apt/lists/*
 
-# Installation de Poetry
+# Poetry
 RUN curl -sSL https://install.python-poetry.org | python3 -
 ENV PATH="/root/.local/bin:$PATH"
-
-# Configuration de Poetry pour ne pas utiliser de virtualenv dans le conteneur
 RUN poetry config virtualenvs.create false
 
-# Copie des fichiers de dépendances
-COPY pyproject.toml poetry.lock* /app/
-
-# Installation des dépendances (sans les dev dependencies pour la prod)
-# Note: On utilise --no-root car le code n'est pas encore copié
+# Dépendances Python (cache Docker si pyproject.toml ne change pas)
+COPY pyproject.toml poetry.lock /app/
 RUN poetry install --no-interaction --no-ansi --no-root
 
-# Copie du code source
+# Code source
 COPY . /app
-
-# Installation du projet lui-même (si nécessaire pour les scripts d'entrée)
 RUN poetry install --no-interaction --no-ansi
 
-# Création des dossiers de données nécessaires
-RUN mkdir -p data/vector_store logs reports
+# Dossiers runtime
+RUN mkdir -p audio_output logs data/corpus
 
-# Exposition du port API (si backend FastAPI utilisé)
+# ── Non-root user for security ──────────────────────────────
+RUN groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid appgroup --shell /bin/bash --create-home appuser && \
+    chown -R appuser:appgroup /app /home/appuser
+USER appuser
+
 EXPOSE 8000
 
-# Commande de démarrage par défaut (Orchestrator ou API)
-# Ici on lance l'API backend par défaut
-CMD ["uvicorn", "backend.api:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

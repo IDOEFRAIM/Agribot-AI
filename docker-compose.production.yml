@@ -1,0 +1,332 @@
+# ============================================
+# AgriConnect Production Architecture
+# 3-Tier Agentic System - DigitalOcean Droplet 4GB
+# ============================================
+# 
+# Architecture:
+# 1. INGESTION LAYER: Scraper (cron job 3x/day)
+# 2. ORCHESTRATION LAYER: LangGraph Agents + FastAPI
+# 3. ACTION LAYER: Azure Speech TTS + WhatsApp
+#
+# Stack: PostgreSQL + pgvector | Redis | Celery | FastAPI
+# Budget: 200$ credits DigitalOcean
+# ============================================
+
+version: '3.8'
+
+services:
+  # ============================================
+  # 1. MÉMOIRE (DATABASE)
+  # ============================================
+  
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: agriconnect-db
+    environment:
+      POSTGRES_DB: agriconnect_prod
+      POSTGRES_USER: ${DB_USER:-agriconnect}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/database/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./backend/database/enable_pgvector.sql:/docker-entrypoint-initdb.d/02_pgvector.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agriconnect -d agriconnect_prod"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - agriconnect-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.5'
+
+  # ============================================
+  # 2. CACHE & MESSAGE BROKER (REDIS)
+  # ============================================
+  
+  redis:
+    image: redis:7-alpine
+    container_name: agriconnect-redis
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - agriconnect-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+
+  # ============================================
+  # 3. CERVEAU (API AGENT - FastAPI + LangGraph)
+  # ============================================
+  
+  api-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: agriconnect-api
+    environment:
+      # Database
+      DATABASE_URL: postgresql://agriconnect:${DB_PASSWORD}@postgres:5432/agriconnect_prod
+      
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      
+      # AI Models
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      
+      # Azure Speech
+      AZURE_SPEECH_KEY: ${AZURE_SPEECH_KEY}
+      AZURE_SPEECH_KEY_2: ${AZURE_SPEECH_KEY_2}
+      AZURE_REGION: ${AZURE_REGION:-westeurope}
+      
+      # WhatsApp (optional)
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      
+      # App config
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      ASYNC_MODE: true
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app/backend
+      - audio_files:/app/audio_files
+      - rag_db:/app/backend/rag_db
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: >
+      sh -c "
+        echo '🚀 Starting AgriConnect API Agent...' &&
+        uvicorn backend.main:app 
+          --host 0.0.0.0 
+          --port 8000 
+          --workers 2 
+          --timeout-keep-alive 65
+          --log-level info
+      "
+    restart: unless-stopped
+    networks:
+      - agriconnect-network
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+          cpus: '1.0'
+
+  # ============================================
+  # 4. MUSCLES (CELERY WORKER - Tasks Async)
+  # ============================================
+  
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: agriconnect-worker
+    environment:
+      DATABASE_URL: postgresql://agriconnect:${DB_PASSWORD}@postgres:5432/agriconnect_prod
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      AZURE_SPEECH_KEY: ${AZURE_SPEECH_KEY}
+      AZURE_SPEECH_KEY_2: ${AZURE_SPEECH_KEY_2}
+      AZURE_REGION: ${AZURE_REGION:-westeurope}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+    volumes:
+      - ./backend:/app/backend
+      - audio_files:/app/audio_files
+      - rag_db:/app/backend/rag_db
+    depends_on:
+      - redis
+      - postgres
+    command: >
+      sh -c "
+        echo '💪 Starting Celery Workers...' &&
+        celery -A backend.workers.celery_app worker 
+          --loglevel=info 
+          --concurrency=4
+          --max-tasks-per-child=1000
+          --time-limit=300
+          --queues=voice,ai,whatsapp,monitoring
+      "
+    restart: unless-stopped
+    networks:
+      - agriconnect-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '0.75'
+
+  # ============================================
+  # 5. INGESTION (SCRAPER - Scheduled Job)
+  # ============================================
+  
+  scraper:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: agriconnect-scraper
+    environment:
+      DATABASE_URL: postgresql://agriconnect:${DB_PASSWORD}@postgres:5432/agriconnect_prod
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+    volumes:
+      - ./backend:/app/backend
+      - scraper_data:/app/backend/sources/raw_data
+      - rag_db:/app/backend/rag_db
+    depends_on:
+      - postgres
+      - redis
+    command: >
+      sh -c "
+        echo '📥 Scraper en attente de jobs planifiés...' &&
+        tail -f /dev/null
+      "
+    restart: unless-stopped
+    networks:
+      - agriconnect-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.25'
+
+  # ============================================
+  # 6. SCHEDULER (CELERY BEAT - Cron Tasks)
+  # ============================================
+  
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: agriconnect-scheduler
+    environment:
+      DATABASE_URL: postgresql://agriconnect:${DB_PASSWORD}@postgres:5432/agriconnect_prod
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+    volumes:
+      - ./backend:/app/backend
+      - beat_schedule:/app/celerybeat-schedule
+    depends_on:
+      - redis
+      - postgres
+    command: >
+      sh -c "
+        echo '⏰ Starting Celery Beat Scheduler...' &&
+        celery -A backend.workers.celery_app beat 
+          --loglevel=info
+          --schedule=/app/celerybeat-schedule/schedule.db
+      "
+    restart: unless-stopped
+    networks:
+      - agriconnect-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.1'
+
+  # ============================================
+  # 7. MONITORING (FLOWER - Celery Dashboard)
+  # ============================================
+  
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: agriconnect-monitor
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      FLOWER_BASIC_AUTH: ${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-AgriFlower2024!}
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    command: >
+      sh -c "
+        echo '🌸 Starting Flower Monitoring...' &&
+        celery -A backend.workers.celery_app flower 
+          --port=5555
+          --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-AgriFlower2024!}
+      "
+    restart: unless-stopped
+    networks:
+      - agriconnect-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.1'
+
+# ============================================
+# VOLUMES (Persistance des données)
+# ============================================
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  audio_files:
+    driver: local
+  scraper_data:
+    driver: local
+  rag_db:
+    driver: local
+  beat_schedule:
+    driver: local
+
+# ============================================
+# NETWORK (Communication inter-services)
+# ============================================
+
+networks:
+  agriconnect-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16

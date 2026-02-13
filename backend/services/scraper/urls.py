@@ -4,5 +4,9 @@ urls = [
     "https://smap.jpl.nasa.gov/",
     "https://bibliocilss.pariis.net/",
     "https://certificat.ecocert.com/",
-    "https://www.agrisource.org/"
+    "https://www.agrisource.org/",
+   "https://earlywarning.usgs.gov/fews/climate-workshop/page2/",
+    "https://www.chc.ucsb.edu/data/chirps",
+    "https://www.soilgrids.org/",
+    "https://www.taranis.com/"
 ]

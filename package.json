@@ -1,0 +1,25 @@
+{
+  "name": "agribot-ai",
+  "version": "1.0.0",
+  "description": "AgConnect is an intelligent agricultural assistant designed to help farmers manage their crops, monitor risks (floods, diseases), and access market information.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IDOEFRAIM/Agribot-AI.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/IDOEFRAIM/Agribot-AI/issues"
+  },
+  "homepage": "https://github.com/IDOEFRAIM/Agribot-AI#readme",
+  "dependencies": {
+    "@prisma/client": "^7.3.0",
+    "prisma": "^7.3.0"
+  }
+}

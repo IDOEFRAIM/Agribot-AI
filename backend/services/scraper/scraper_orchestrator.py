@@ -12,10 +12,10 @@ import sys
 # Ajout du root au path pour trouver config.py
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import config
+import backend.config as config
 
 # Importer tes services (adapter si signatures différentes)
-from . import DocumentScraper, WeatherForecastService, SonagessScraper, ScrapperProduct
+from . import DocumentScraper, WeatherForecastService, SonagessScraper, AnamBulletinScraper
 
 # Logger
 logger = logging.getLogger("scraper.orchestrator")
@@ -89,7 +89,7 @@ class ScraperOrchestrator:
         # Instancier les services (adapter les signatures si besoin)
         self.document_scraper = DocumentScraper(headless=headless)
         self.weather_service = WeatherForecastService()
-        self.bulletin_anam = ScrapperProduct( "backend/sources/raw_data/",urls_default, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+        self.bulletin_anam = AnamBulletinScraper()
         self.sonagess_scraper = SonagessScraper(
             start_url=getattr(config, "START_URL", config.START_URL),
             download=True,
