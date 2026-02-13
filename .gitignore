@@ -96,3 +96,29 @@ coverage.xml
 # Poetry
 # ============================
 poetry.lock
+
+# ============================
+# Credentials & Secrets
+# ============================
+backend/services/external_apis/earth_engine/apikey.json
+*.key
+*.pem
+*.p12
+*.crt
+*.bak
+
+# ============================
+# Audio & Temporary Files
+# ============================
+audio_output/
+
+# ============================
+# OS-specific
+# ============================
+.DS_Store
+Thumbs.db
+
+# ============================
+# Notebooks
+# ============================
+*.ipynb
