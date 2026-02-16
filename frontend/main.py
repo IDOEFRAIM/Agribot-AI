@@ -30,7 +30,7 @@ def query_backend(user_query, user_id, zone_id, crop, mode, user_level):
 
     try:
         # Timeout de 60s car la génération audio/IA peut être longue
-        response = requests.post(API_URL, json=payload, timeout=60)
+        response = requests.post(API_URL, json=payload, timeout=600)
         response.raise_for_status()
         data = response.json()
 

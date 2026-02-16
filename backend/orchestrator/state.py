@@ -33,6 +33,7 @@ class GlobalAgriState(TypedDict):
     zone_id: str
     requete_utilisateur: Optional[str]  # Optionnel car peut être un rapport auto
     user_id: str
+    user_phone: Optional[str]           # Numéro WhatsApp (pour MarketplaceAgent)
     crop: str                           # Culture principale (ex: Maïs, Coton)
     user_reliability_score: float       # Pilier 2 — Note de confiance (0.0 à 1.0)
     is_sms_mode: bool                   # Pilier 4 — Mode SMS activé

@@ -6,12 +6,22 @@ It ensures a unified experience by managing state, context, and routing logic.
 
 ## 🧠 Core Components
 
-### 1. Main Orchestrator (`main_orchestrator.py`)
-*   **Role**: Application Entry Point.
-*   **Function**:
-    *   Initialize the two main workflows: **Message Flow** (Reactive) and **Report Flow** (Proactive).
-    *   Receives the global application state (`GlobalAgriState`).
-    *   Dispatches execution based on `flow_type` ("MESSAGE" or "REPORT").
+
+### 1. [DEPRECATED] Main Orchestrator (`main_orchestrator.py`)
+> **Deprecated:** All orchestration is now handled by `message_flow.py`. Do **not** use `main_orchestrator.py`—it will raise an ImportError. Use `MessageResponseFlow` from `backend/orchestrator/message_flow.py` for all orchestration (API, Celery, etc.).
+
+---
+
+### 2. Message Response Flow (`message_flow.py`)
+*   **Role**: Application Entry Point & Conversation Manager (Reactive Workflow).
+*   **Function**: Handles all orchestration, both for direct user questions and async/worker tasks.
+*   **Process**:
+    1.  **Intent Classification**: Calls `IntentClassifier` to understand if the user is asking about Weather, Crops, Soil, Health, or Market.
+    2.  **Routing**: Dynamically routes the state to the specific Agent (e.g., `ClimateVigilance`, `ProductionExpert`).
+    3.  **Execution**: Triggers the Agent's internal logic.
+    4.  **Response**: Collects the agent's final answer and returns it to the frontend or async caller.
+
+---
 
 ### 2. Message Response Flow (`message_flow.py`)
 *   **Role**: Conversation Manager (Reactive Workflow).
@@ -43,9 +53,10 @@ It ensures a unified experience by managing state, context, and routing logic.
 
 ```mermaid
 graph TD
-    User-->|Question| MainOrchestrator
-    MainOrchestrator -->|MESSAGE| MessageFlow
-    MainOrchestrator -->|REPORT| ReportFlow
+
+    User-->|Question| MessageFlow
+    MessageFlow -->|MESSAGE| IntentClassifier
+    MessageFlow -->|REPORT| ReportFlow
     
     subgraph "Message Flow"
     MessageFlow --> IntentClassifier

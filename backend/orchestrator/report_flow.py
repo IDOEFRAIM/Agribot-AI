@@ -774,7 +774,7 @@ class ReportFlow:
             }
 
     def run(self, state: GlobalAgriState) -> Dict[str, Any]:
-        """Alias pour intégration dans le main_orchestrator."""
+        """Alias pour intégration dans le message_flow."""
         return self.graph.invoke(state)
 
 

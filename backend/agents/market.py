@@ -1,35 +1,59 @@
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional, TypedDict
+import operator
+import hashlib
+from typing import Any, Dict, List, Optional, TypedDict, Annotated
 
 from langgraph.graph import END, StateGraph
+from langgraph.checkpoint.memory import MemorySaver 
+
 
 from backend.agents.system.prompts import (
-    MARKET_EXTRACT_INTENT_TEMPLATE,
-    MARKET_MODERATE_FINANCE_TEMPLATE,
-    MARKET_SYSTEM_PROMPT_TEMPLATE,
-    MARKET_USER_PROMPT_TEMPLATE,
-)
+        MARKET_EXTRACT_INTENT_TEMPLATE,
+        MARKET_MODERATE_FINANCE_TEMPLATE,
+        MARKET_SYSTEM_PROMPT_TEMPLATE,
+        MARKET_USER_PROMPT_TEMPLATE,
+    )
 from ..rag.components import get_groq_sdk
 from ..tools.market import AgrimarketTool
+
 
 logger = logging.getLogger("Agent.MarketCoach")
 
 class MarketAgentState(TypedDict, total=False):
+    # Core User Data
     user_query: str
     user_profile: Dict[str, Any]
     user_level: str
-    intent: str  # CHECK_PRICE, SELL_OFFER, BUY_OFFER, SCAM_CHECK, REGISTER_SURPLUS
+    
+    # Intent & Entities
+    intent: str  # CHECK_PRICE, SELL_OFFER, BUY_OFFER, SCAM_CHECK, REGISTER_SURPLUS, CONFIRM_TRANSACTION, CANCEL_TRANSACTION
     product: str
     location: str
     price_mentioned: Optional[float]
     quantity_mentioned: Optional[float]
+    unit_mentioned: Optional[str]
+    normalized_quantity_kg: Optional[float]
+    
+    # Process Data
     market_data: Dict[str, Any]
     scam_analysis: Dict[str, Any]
     final_response: str
     status: str
-    warnings: List[str]
+    
+    # Robustness & Logic (Using operator.add for accumulation)
+    warnings: Annotated[List[str], operator.add]
+    missing_fields: List[str]
+    validation_errors: Annotated[List[str], operator.add]
+    
+    # Transaction State
+    waiting_for_confirmation: bool
+    transaction_payload: Dict[str, Any]
+    transaction_hash: str
+    audio_file_path: Optional[str]
+    
+    # Security
     security_status: str
     security_reason: str
 
@@ -38,309 +62,367 @@ class MarketCoach:
         self.model_planner = "llama-3.1-8b-instant"
         self.model_answer = "llama-3.3-70b-versatile"
         self.tool = AgrimarketTool()
+        
+        #efra mets cadans les tools,c est plus facile a maintenir,on aura juste a faire les calcul idoine
+        self.UNIT_REGISTRY = {
+            "sac": 100,      
+            "sac_100": 100,
+            "sac_50": 50,
+            "tin": 15,       
+            "panier": 25,
+            "tonnes": 1000,
+            "kg": 1
+        }
+        ##note a moi meme,on fetch avec la db
+        self.VALID_CITIES = [
+            "ouagadougou", "bobo-dioulasso", "bobo", "koudougou", "ouahigouya", 
+            "kaya", "banfora", "pouytenga", "fada", "fada n'gourma", "dédougou", "nouna"
+        ]
 
         try:
             self.llm = llm_client if llm_client else get_groq_sdk()
         except Exception as exc:
-            logger.error("Impossible d'initialiser le LLM : %s", exc)
+            logger.error("LLM Initialization failed: %s", exc)
             self.llm = None
 
     # ------------------------------------------------------------------ #
-    # Nœuds du graphe                                                    #
+    # NODES
     # ------------------------------------------------------------------ #
+    
+    def transcribe_node(self, state: MarketAgentState) -> Dict[str, Any]:
+        """Handles audio input. Returns partial state update."""
+        audio_path = state.get("audio_file_path")
+        if audio_path and audio_path.endswith(".wav"):
+            logger.info(f"Processing audio: {audio_path}")
+            # Mock transcription logic
+            # return {"user_query": transcribed_text}
+        return {} 
 
-    def analyze_node(self, state: MarketAgentState) -> MarketAgentState:
-        """
-        Analyse l'intention financière : Demande de prix, Offre, ou Arnaque potentielle.
-        C'est ici que se joue la sécurité financière.
-        """
-        state = dict(state)
+    def analyze_node(self, state: MarketAgentState) -> Dict[str, Any]:
+        """Analyzes intent and performs security checks."""
         query = state.get("user_query", "").strip()
-        warnings = list(state.get("warnings", []))
-
+        
         if not query:
-            return {"status": "ERROR", "warnings": ["Question vide"]}
+            return {"status": "ERROR", "warnings": ["Empty query received."]}
 
-        # 1. D'abord, on vérifie si c'est une arnaque (Le Market Agent est le gardien financier)
+        # 1. Security Check (Fail-Fast)
         moderation = self._moderate_finance(query)
         if moderation.get("is_scam"):
-            state.update({
+            return {
                 "security_status": "SCAM_DETECTED",
                 "security_reason": moderation.get("reason"),
                 "status": "SCAM_DETECTED"
-            })
-            return state
+            }
 
-        # 2. Si c'est sûr, on analyse le besoin commercial
+        # 2. Human-in-the-loop Confirmation Logic
+        if state.get("waiting_for_confirmation"):
+            if re.search(r"\b(oui|ok|d'accord|c'est bon|valide|confirme)\b", query, re.IGNORECASE):
+                return {
+                    "intent": "CONFIRM_TRANSACTION",
+                    "status": "CONFIRMED",
+                    "security_status": "SAFE"
+                }
+            if re.search(r"\b(non|annule|stop|pas bonne|erreur)\b", query, re.IGNORECASE):
+                return {
+                    "intent": "CANCEL_TRANSACTION",
+                    "status": "CANCELLED",
+                    "waiting_for_confirmation": False
+                }
+
+        # 3. Standard Intent Extraction
         analysis = self._extract_market_intent(query)
-        
-        state.update({
+        return {
             "intent": analysis.get("intent", "CHECK_PRICE"),
             "product": analysis.get("product"),
             "location": analysis.get("location"),
             "price_mentioned": analysis.get("price"),
             "quantity_mentioned": analysis.get("quantity"),
+            "unit_mentioned": analysis.get("unit"),
             "security_status": "SAFE",
             "status": "ANALYZED"
-        })
-        return state
+        }
 
-    def fetch_data_node(self, state: MarketAgentState) -> MarketAgentState:
-        """
-        Récupère les données de marché via AgrimarketTool.
-        """
-        state = dict(state)
-        if state.get("status") == "SCAM_DETECTED":
-            return state
+    def validate_node(self, state: MarketAgentState) -> Dict[str, Any]:
+        """Validates business rules and normalizes data."""
+        # Skip validation for non-transactional statuses
+        if state.get("status") in ["SCAM_DETECTED", "ERROR", "CONFIRMED", "CANCELLED"]:
+            return {}
 
-        product = state.get("product")
         intent = state.get("intent")
-        location = state.get("location")
-        quantity = state.get("quantity_mentioned", 0)
         
+        if intent not in ["REGISTER_SURPLUS", "SELL", "BUY_OFFER"]:
+            return {}
+
+        errors = []
+        missing = []
+        updates = {}
+
+        # 1. Product Validation
+        if not state.get("product"):
+            missing.append("produit (maïs, sorgho...)")
+
+        # 2. Quantity & Unit Validation
+        qty = state.get("quantity_mentioned")
+        unit = state.get("unit_mentioned", "sac")
+        
+        if not qty:
+            missing.append("quantité")
+        else:
+            unit_clean = str(unit).lower().replace("s", "")
+            factor = 100 
+            
+            for key, val in self.UNIT_REGISTRY.items():
+                if key in unit_clean:
+                    factor = val
+                    break
+            
+            try:
+                updates["normalized_quantity_kg"] = float(qty) * factor
+            except ValueError:
+                errors.append("Quantité invalide (doit être un nombre).")
+
+        # 3. Location Validation
+        loc = state.get("location", "").lower()
+        if not loc:
+            missing.append("lieu")
+        elif not any(valid in loc for valid in self.VALID_CITIES):
+            # Non-blocking warning
+            updates["warnings"] = [f"Lieu '{loc}' non trouvé dans le registre officiel."]
+
+        # 4. Price Validation
+        price = state.get("price_mentioned")
+        if price is not None and (not isinstance(price, (int, float)) or price < 0):
+             errors.append("Prix invalide.")
+
+        # Final Decision
+        updates["missing_fields"] = missing
+        updates["validation_errors"] = errors
+
+        if not missing and not errors:
+            # Prepare for Idempotency
+            user_id = state.get("user_profile", {}).get("phone", "anon_user")
+            payload = {
+                 "product": state.get("product"),
+                 "quantity": updates.get("normalized_quantity_kg", 0),
+                 "price": price,
+                 "location": state.get("location"),
+                 "user_id": user_id
+            }
+            payload_str = json.dumps(payload, sort_keys=True)
+            tx_hash = hashlib.md5(payload_str.encode()).hexdigest()
+            
+            updates.update({
+                "transaction_payload": payload,
+                "transaction_hash": tx_hash,
+                "waiting_for_confirmation": True,
+                "status": "WAITING_CONFIRMATION"
+            })
+        else:
+            updates["status"] = "MISSING_INFO"
+            
+        return updates
+
+    def fetch_data_node(self, state: MarketAgentState) -> Dict[str, Any]:
+        """Executes transactions or fetches market data."""
+        status = state.get("status")
+        
+        if status in ["SCAM_DETECTED", "WAITING_CONFIRMATION", "MISSING_INFO", "CANCELLED", "ERROR"]:
+            return {}
+
         data = {}
+        updates = {}
 
-        # Si l'utilisateur veut ENREGISTRER UN SURPLUS
-        if (intent == "REGISTER_SURPLUS" or intent == "SELL") and product and quantity:
-            # 1. Enregistrement
-            success = self.tool.register_surplus_offer(product, quantity, location or "Inconnu")
+        # Path A: Transaction Execution
+        if status == "CONFIRMED" and state.get("transaction_payload"):
+            payload = state["transaction_payload"]
+            
+            # Here we would check if tx_hash already exists in DB for idempotency
+            success = self.tool.register_surplus_offer(
+                payload["product"], 
+                payload["quantity"],
+                payload["location"]
+            )
+            
             data["registration_status"] = "SUCCESS" if success else "OFFLINE_SAVED"
-            
-            # 2. Récupération des infos logistiques locales
-            if location:
-                data["logistics"] = self.tool.get_logistics_info(location)
-            
-            # On continue pour récupérer aussi les tendances et donner un conseil
-        
-        # Récupération des prix
-        if product:
-            prices = self.tool.get_commodity_price(product)
-            if prices:
-                data["prices"] = prices
-            
-            # Analyse de volatilité/tendance
-            data["trends"] = self.tool.analyze_market_trends(product)
-        
-        # Récupération des offres pour l'intention inverse (si je veux vendre, je cherche des acheteurs)
-        # Note: ceci est une simplification, l'outil réel pourrait avoir besoin de plus de paramètres
-        # Pour l'instant on simule ou on utilise ce qui est dispo
-        
-        state.update({
-            "market_data": data,
-            "status": "DATA_FETCHED"
-        })
-        return state
+            if payload["location"]:
+                data["logistics"] = self.tool.get_logistics_info(payload["location"])
+                
+            updates["status"] = "COMPLETED_TRANSACTION"
 
-    def compose_node(self, state: MarketAgentState) -> MarketAgentState:
-        state = dict(state)
+        # Path B: Information Retrieval
+        else:
+            product = state.get("product")
+            if product:
+                prices = self.tool.get_commodity_price(product)
+                if prices:
+                    data["prices"] = prices
+                data["trends"] = self.tool.analyze_market_trends(product)
+            
+            updates["status"] = "DATA_FETCHED"
+            
+        updates["market_data"] = data
+        return updates
+
+    def compose_node(self, state: MarketAgentState) -> Dict[str, Any]:
+        """Generates the final response based on status."""
         status = state.get("status")
         
         if status == "SCAM_DETECTED":
-            response = self._build_scam_alert(state)
-            state.update({"final_response": response})
-            return state
+            return {"final_response": self._build_scam_alert(state)}
 
-        # Construction de la réponse commerciale
+        if status == "MISSING_INFO":
+            missing = ", ".join(state.get("missing_fields", []))
+            return {"final_response": f"Pour finaliser, j'ai besoin de : {missing}. Pouvez-vous préciser ?"}
+
+        if status == "WAITING_CONFIRMATION":
+            payload = state.get("transaction_payload", {})
+            response = (
+                f"📝 **Récapitulatif** :\n"
+                f"- {payload.get('product')} : {payload.get('quantity')} kg\n"
+                f"- Lieu : {payload.get('location')}\n"
+                f"- Prix : {payload.get('price', 'Non précisé')} FCFA\n\n"
+                "Je confirme l'enregistrement ? (Oui/Non)"
+            )
+            return {"final_response": response}
+
+        if status == "CANCELLED":
+            return {"final_response": "❌ Opération annulée."}
+
+        # Default / Completed
         response = self._generate_market_response(state)
-        state.update({"final_response": response, "status": "COMPLETED"})
-        return state
+        return {"final_response": response, "status": "COMPLETED"}
 
     # ------------------------------------------------------------------ #
-    # Utilitaires & Prompts                                              #
+    # HELPERS
     # ------------------------------------------------------------------ #
-
-    def _extract_json_block(self, text: str) -> Dict[str, Any]:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except (json.JSONDecodeError, ValueError):
-                pass
-        return {}
 
     def _moderate_finance(self, query: str) -> Dict[str, Any]:
-        """Détecte les arnaques financières, demandes d'argent, etc."""
-        if not self.llm:
-            return {"is_scam": False}
-
-        
-        
+        if not self.llm: return {"is_scam": False}
         try:
-            # 1. On remplit le template avec la requête utilisateur
-            formatted_finance_prompt = MARKET_MODERATE_FINANCE_TEMPLATE.format(query=query)
-
-            # 2. On l'envoie au LLM
+            formatted = MARKET_MODERATE_FINANCE_TEMPLATE.format(query=query)
             resp = self.llm.chat.completions.create(
                 model=self.model_planner,
-                messages=[{"role": "user", "content": formatted_finance_prompt}],
+                messages=[{"role": "user", "content": formatted}],
                 temperature=0,
                 response_format={"type": "json_object"} 
             )
             return json.loads(resp.choices[0].message.content)
         except Exception as e:
-            logger.warning("Erreur moderation market: %s", e)
+            logger.warning("Moderation failed: %s", e)
             return {"is_scam": False}
 
-    def _build_scam_alert(self, state: MarketAgentState) -> str:
-        reason = state.get("security_reason", "Activité suspecte.")
-        return (
-            "🚨 **ALERTE SÉCURITÉ FINANCIÈRE**\n\n"
-            f"{reason}\n\n"
-            "⛔ **RÈGLE D'OR :** AgriConnect ne vous demandera **JAMAIS** de transfert d'argent "
-            "par téléphone pour débloquer une aide ou un prix.\n"
-            "Si on vous promet un prix 50% au-dessus du marché, c'est probablement une arnaque."
-        )
-
     def _extract_market_intent(self, query: str) -> Dict[str, Any]:
-        
+        if not self.llm: return {"intent": "CHECK_PRICE"}
         try:
-            # 1. Injection de la requête dans le template d'extraction
-            # Assure-toi que MARKET_EXTRACT_INTENT_TEMPLATE est le nom dans ton prompts.py
-            formatted_intent_prompt = MARKET_EXTRACT_INTENT_TEMPLATE.format(query=query)
-
-            # 2. Appel au LLM (Modèle Planner / Léger)
+            formatted = MARKET_EXTRACT_INTENT_TEMPLATE.format(query=query)
             resp = self.llm.chat.completions.create(
                 model=self.model_planner,
-                messages=[{"role": "user", "content": formatted_intent_prompt}],
-                temperature=0, # On reste à 0 pour une extraction stricte et constante
+                messages=[{"role": "user", "content": formatted}],
+                temperature=0,
                 response_format={"type": "json_object"}
             )
-
             return json.loads(resp.choices[0].message.content)
-        except Exception as e:
-            logger.warning("Erreur extraction intent: %s", e)
+        except Exception:
             return {"intent": "CHECK_PRICE"}
+
+    def _build_scam_alert(self, state: MarketAgentState) -> str:
+        reason = state.get("security_reason", "Suspicious activity detected.")
+        return f"🚨 **ALERTE SÉCURITÉ**\n{reason}\nRefusez tout transfert d'argent."
 
     def _generate_market_response(self, state: MarketAgentState) -> str:
         data = state.get("market_data", {})
-        intent = state.get("intent")
-        product = state.get("product")
-        status = state.get("status")
-        location = state.get("location", "votre région")
-        
-        intro_msg = ""
-        # Si on a enregistré un surplus
-        reg_status = data.get("registration_status")
-        logistics = data.get("logistics", {})
-        
-        if reg_status == "SUCCESS":
-            intro_msg = (
-                f"✅ **Offre validée !**\n"
-                f"Vos {state.get('quantity_mentioned')} de {product} sont enregistrés dans la base nationale SONAGESS.\n"
-            )
-        elif reg_status == "OFFLINE_SAVED":
-            intro_msg = (
-                f"📂 **Offre sauvegardée (Mode Connexion Faible)**\n"
-                f"J'ai noté vos {state.get('quantity_mentioned')} de {product} dans votre dossier temporaire.\n"
-                "La synchronisation avec la SONAGESS se fera automatiquement dès le retour du réseau.\n"
-            )
-        
-        # Ajout systématique de l'appel à l'action logistique si vente
-        if reg_status and logistics:
-            intro_msg += (
-                f"\n📍 **Action requise :**\n"
-                f"Le point de collecte SONAGESS le plus proche est à : **{logistics.get('sonagess_center')}**.\n"
-                "Voulez-vous que je leur envoie vos coordonnées GPS pour le ramassage ?\n\n"
-                "⚖️ **Précision importante :** S'agit-il de sacs de **50kg** ou de **100kg** ? C'est important pour les camions.\n\n"
-            )
-
-        if not product and intent == "CHECK_PRICE":
-            return intro_msg + "De quel produit souhaitez-vous connaître le prix ? (Maïs, Sorgho, Mil, Riz...)"
+        if not self.llm:
+            return "Données récupérées (Mode hors ligne)."
             
-        
-        
+        system_content = MARKET_SYSTEM_PROMPT_TEMPLATE.format(
+            market_data=json.dumps(data, ensure_ascii=False),
+            logistics_data=json.dumps(data.get("logistics", {}), ensure_ascii=False)
+        )
         try:
-            # 1. Préparation du prompt Système (avec les données data et logistics)
-            # On convertit les dictionnaires en JSON string pour l'affichage dans le prompt
-            system_content = MARKET_SYSTEM_PROMPT_TEMPLATE.format(
-                market_data=json.dumps(data, ensure_ascii=False),
-                logistics_data=json.dumps(logistics, ensure_ascii=False)
-            )
-
-            # 2. Préparation du prompt Utilisateur (avec la query de l'état)
-            user_content = MARKET_USER_PROMPT_TEMPLATE.format(
-                query=state.get('user_query')
-            )
-
-            # 3. Appel au LLM
             resp = self.llm.chat.completions.create(
                 model=self.model_answer,
                 messages=[
                     {"role": "system", "content": system_content},
-                    {"role": "user", "content": user_content}
+                    {"role": "user", "content": MARKET_USER_PROMPT_TEMPLATE.format(query=state.get('user_query'))}
                 ],
                 temperature=0.2
             )
             return resp.choices[0].message.content
-        except Exception as e:
-            logger.warning("Erreur génération réponse marché: %s", e)
-            return "Désolé, je ne peux pas accéder aux données du marché pour le moment."
+        except Exception:
+            return "Désolé, service indisponible."
 
-    def build(self):
+    def route_analysis(state):
+        status = state.get("status")
+        if status == "SCAM_DETECTED":
+            return "compose" # Fast track to alert
+        if status == "CONFIRMED":
+            return "fetch_data" # Fast track to execution
+        if status == "CANCELLED":
+            return "compose" # Fast track to cancel msg
+        if status == "ERROR":
+            return END
+        return "validate"
+
+    def route_validation(state):
+        if state.get("status") in ["MISSING_INFO", "WAITING_CONFIRMATION"]:
+            return "compose" # Ask user for details/confirm
+        return "fetch_data" # Proceed to fetch/execute
+    # ------------------------------------------------------------------ #
+    # BUILD
+    # ------------------------------------------------------------------ #
+
+    def build(self, checkpointer=None):
+        """Builds the StateGraph with optional persistence."""
         workflow = StateGraph(MarketAgentState)
+        
+        workflow.add_node("transcribe", self.transcribe_node)
         workflow.add_node("analyze", self.analyze_node)
+        workflow.add_node("validate", self.validate_node)
         workflow.add_node("fetch_data", self.fetch_data_node)
         workflow.add_node("compose", self.compose_node)
 
-        workflow.set_entry_point("analyze")
+        workflow.set_entry_point("transcribe")
+        workflow.add_edge("transcribe", "analyze")
         
-        def route_analysis(state):
-            if state.get("status") == "SCAM_DETECTED":
-                return "compose"
-            if state.get("status") == "ERROR":
-                return END
-            return "fetch_data"
 
-        workflow.add_conditional_edges("analyze", route_analysis)
+        workflow.add_conditional_edges("analyze", self.route_analysis)
+        
+        
+            
+        workflow.add_conditional_edges("validate", self.route_validation)
+        
         workflow.add_edge("fetch_data", "compose")
         workflow.add_edge("compose", END)
         
-        return workflow.compile()
-
+        return workflow.compile(checkpointer=checkpointer)
 
 if __name__ == "__main__":
-    # 1. Initialisation du coach et compilation du graph
+    # Persistence setup (In-Memory for testing, replace with Postgres/Sqlite for Prod)
+    memory = MemorySaver()
     coach = MarketCoach()
-    app = coach.build()
+    app = coach.build(checkpointer=memory)
 
-    # Configuration des tests
-    test_cases = [
-        {
-            "name": "DEMANDE DE PRIX",
-            "query": "Quel est le prix actuel du sac de maïs de 100kg à Dédougou ?"
-        },
-        {
-            "name": "DÉTECTION D'ARNAQUE",
-            "query": "Félicitations ! Vous avez gagné une aide de 500.000 FCFA du ministère. Envoyez 10.000 FCFA par Orange Money au 07000000 pour débloquer votre dossier."
-        },
-        {
-            "name": "ENREGISTREMENT SURPLUS",
-            "query": "J'ai 50 sacs de maïs à vendre à Nouna."
-        }
-    ]
+    # Simulating a conversation thread
+    thread_id = "user_123_phone_number"
+    config = {"configurable": {"thread_id": thread_id}}
 
-    print("🚀 Démarrage des tests AgriConnect Market Coach...\n")
+    print("🚀 Démarrage AgriConnect Market Coach (Persistent Mode)...\n")
 
-    for case in test_cases:
-        print(f"--- TEST : {case['name']} ---")
-        print(f"Question : {case['query']}")
-        
-        # Initialisation de l'état
-        initial_state = {
-            "user_query": case['query'],
-            "user_profile": {"niveau": "débutant", "région": "Boucle du Mouhoun"},
-            "warnings": []
-        }
+    # Step 1: Initial Request
+    print("--- User: J'ai 50 sacs de maïs à vendre à Nouna ---")
+    initial_state = {
+        "user_query": "J'ai 50 sacs de maïs à vendre à Nouna",
+        "user_profile": {"niveau": "débutant"},
+    }
+    result = app.invoke(initial_state, config=config)
+    print(f"Agent: {result.get('final_response')}\n")
 
-        # Exécution du graph
-        try:
-            result = app.invoke(initial_state)
-            
-            print(f"Statut Final : {result.get('status')}")
-            print(f"Intention détectée : {result.get('intent')}")
-            print(f"Réponse de l'Agent :\n{result.get('final_response')}")
-            
-        except Exception as e:
-            print(f"❌ Erreur lors de l'exécution : {e}")
-        
-        print("-" * 50 + "\n")
+    # Step 2: User Confirms (Persistence Check)
+    print("--- User: Oui, c'est bon ---")
+    follow_up_state = {
+        "user_query": "Oui, c'est bon",
+        # We don't need to resend profile/intent, memory handles it
+    }
+    result = app.invoke(follow_up_state, config=config)
+    print(f"Agent: {result.get('final_response')}\n")
+    print(f"Status Final: {result.get('status')}")

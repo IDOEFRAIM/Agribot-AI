@@ -265,3 +265,224 @@ class Reminder(Base):
             "scheduled_at": self.scheduled_at.isoformat() if self.scheduled_at else None,
             "sent": self.sent,
         }
+
+
+# ══════════════════════════════════════════════════════════════
+# AGRIBUSINESS — Modèles marketplace (alignés sur le Prisma frontend)
+# ══════════════════════════════════════════════════════════════
+
+class ClimaticRegion(Base):
+    """Régions climatiques du Burkina Faso."""
+    __tablename__ = "climatic_regions"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, unique=True, nullable=False)
+    description = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def to_dict(self):
+        return {"id": self.id, "name": self.name, "description": self.description}
+
+
+class Producer(Base):
+    """Producteur/agriculteur inscrit sur la plateforme."""
+    __tablename__ = "producers"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    business_name = Column(String)
+    status = Column(String, default="ACTIVE")      # PENDING | ACTIVE | SUSPENDED
+    zone_id = Column(String, ForeignKey("zones.id"))
+    region = Column(String)
+    province = Column(String)
+    commune = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "user_id": self.user_id,
+            "business_name": self.business_name, "status": self.status,
+            "zone_id": self.zone_id, "commune": self.commune,
+        }
+
+
+class Farm(Base):
+    """Exploitation agricole d'un producteur."""
+    __tablename__ = "farms"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    location = Column(String)
+    size = Column(Float)                 # hectares
+    soil_type = Column(String)
+    water_source = Column(String)
+    zone_id = Column(String, ForeignKey("zones.id"))
+    producer_id = Column(String, ForeignKey("producers.id", ondelete="CASCADE"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "name": self.name, "location": self.location,
+            "size": self.size, "soil_type": self.soil_type,
+            "producer_id": self.producer_id, "zone_id": self.zone_id,
+        }
+
+
+class Stock(Base):
+    """Inventaire d'une exploitation (intrants, récoltes, équipement)."""
+    __tablename__ = "stocks"
+
+    id = Column(String, primary_key=True)
+    farm_id = Column(String, ForeignKey("farms.id", ondelete="CASCADE"))
+    item_name = Column(String, nullable=False)
+    quantity = Column(Float, default=0)
+    unit = Column(String, default="kg")
+    type = Column(String, default="HARVEST")   # INPUT | HARVEST | EQUIPMENT
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "farm_id": self.farm_id,
+            "item_name": self.item_name, "quantity": self.quantity,
+            "unit": self.unit, "type": self.type,
+        }
+
+
+class StockMovement(Base):
+    """Mouvements d'inventaire (entrées, sorties, pertes)."""
+    __tablename__ = "stock_movements"
+
+    id = Column(String, primary_key=True)
+    stock_id = Column(String, ForeignKey("stocks.id", ondelete="CASCADE"))
+    type = Column(String, nullable=False)    # IN | OUT | WASTE
+    quantity = Column(Float, nullable=False)
+    reason = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "stock_id": self.stock_id,
+            "type": self.type, "quantity": self.quantity, "reason": self.reason,
+        }
+
+
+class Expense(Base):
+    """Dépenses associées à une exploitation."""
+    __tablename__ = "expenses"
+
+    id = Column(String, primary_key=True)
+    farm_id = Column(String, ForeignKey("farms.id", ondelete="CASCADE"))
+    label = Column(String, nullable=False)
+    amount = Column(Float, nullable=False)
+    category = Column(String, default="OTHER")   # LABOUR | FUEL | SEEDS | FERTILIZER | TRANSPORT | OTHER
+    date = Column(DateTime(timezone=True), server_default=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "farm_id": self.farm_id,
+            "label": self.label, "amount": self.amount,
+            "category": self.category,
+        }
+
+
+class Product(Base):
+    """Produit mis en vente par un producteur (catalogue public)."""
+    __tablename__ = "products"
+
+    id = Column(String, primary_key=True)
+    short_code = Column(String, unique=True)
+    name = Column(String, nullable=False, default="Produit")
+    category_label = Column(String)
+    local_names = Column(JSON)             # {"moore": "...", "dioula": "..."}
+    description = Column(Text)
+    price = Column(Float, nullable=False)
+    unit = Column(String, default="kg")
+    quantity_for_sale = Column(Float, default=0)
+    images = Column(JSON, default=list)
+    audio_url = Column(String)
+    producer_id = Column(String, ForeignKey("producers.id", ondelete="CASCADE"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "short_code": self.short_code,
+            "name": self.name, "category_label": self.category_label,
+            "price": self.price, "unit": self.unit,
+            "quantity_for_sale": self.quantity_for_sale,
+            "producer_id": self.producer_id,
+        }
+
+
+class Order(Base):
+    """Commande passée par un acheteur."""
+    __tablename__ = "orders"
+
+    id = Column(String, primary_key=True)
+    buyer_id = Column(String, ForeignKey("users.id"))
+    customer_name = Column(String)
+    customer_phone = Column(String)
+    zone_id = Column(String, ForeignKey("zones.id"))
+    payment_method = Column(String, default="CASH")   # CASH | MOBILE_MONEY | BANK_TRANSFER
+    city = Column(String)
+    gps_lat = Column(Float)
+    gps_lng = Column(Float)
+    delivery_desc = Column(String)
+    audio_url = Column(String)
+    status = Column(String, default="PENDING")         # PENDING | CONFIRMED | SHIPPED | DELIVERED | CANCELLED
+    source = Column(String, default="WHATSAPP")        # APP | WHATSAPP | VOICE_CALL
+    total_amount = Column(Float, default=0)
+    whatsapp_id = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "buyer_id": self.buyer_id,
+            "customer_name": self.customer_name, "customer_phone": self.customer_phone,
+            "status": self.status, "total_amount": self.total_amount,
+            "zone_id": self.zone_id, "source": self.source,
+        }
+
+
+class OrderItem(Base):
+    """Lignes de commande (produits commandés)."""
+    __tablename__ = "order_items"
+
+    id = Column(String, primary_key=True)
+    order_id = Column(String, ForeignKey("orders.id", ondelete="CASCADE"))
+    product_id = Column(String, ForeignKey("products.id"))
+    quantity = Column(Float, nullable=False)
+    price_at_sale = Column(Float, nullable=False)
+
+    def to_dict(self):
+        return {
+            "id": self.id, "order_id": self.order_id,
+            "product_id": self.product_id, "quantity": self.quantity,
+            "price_at_sale": self.price_at_sale,
+        }
+
+
+class MarketAlert(Base):
+    """Alertes de marché pour le matching acheteur ↔ vendeur."""
+    __tablename__ = "market_alerts"
+
+    id = Column(String, primary_key=True)
+    product_name = Column(String, nullable=False)
+    zone_id = Column(String, ForeignKey("zones.id"))
+    buyer_phone = Column(String)
+    status = Column(String, default="SEARCHING")   # SEARCHING | MATCHED | COMPLETED
+    matched_product_id = Column(String)
+    matched_producer_phone = Column(String)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "product_name": self.product_name,
+            "zone_id": self.zone_id, "buyer_phone": self.buyer_phone,
+            "status": self.status,
+        }

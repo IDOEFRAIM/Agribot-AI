@@ -53,7 +53,17 @@ services:
   redis:
     image: redis:7-alpine
     container_name: agriconnect-redis
-    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --appendonly yes
+    command: >
+      redis-server
+        --maxmemory 512mb
+        --maxmemory-policy allkeys-lru
+        --appendonly yes
+        --appendfsync everysec
+        --tcp-keepalive 60
+        --timeout 300
+        --tcp-backlog 511
+        --save 900 1
+        --save 300 10
     ports:
       - "6379:6379"
     volumes:
@@ -144,15 +154,18 @@ services:
           cpus: '1.0'
 
   # ============================================
-  # 4. MUSCLES (CELERY WORKER - Tasks Async)
+  # 4. MUSCLES (CELERY WORKERS - Tasks Async)
   # ============================================
+  # Séparés par domaine pour isolation des pannes
+  # et scaling indépendant.
   
-  celery-worker:
+  # Worker IA — tâches lourdes (LLM), faible concurrence
+  celery-worker-ai:
     build:
       context: .
       dockerfile: Dockerfile
       target: production
-    container_name: agriconnect-worker
+    container_name: agriconnect-worker-ai
     environment:
       DATABASE_URL: postgresql://agriconnect:${DB_PASSWORD}@postgres:5432/agriconnect_prod
       REDIS_URL: redis://redis:6379/0
@@ -171,26 +184,140 @@ services:
       - audio_files:/app/audio_files
       - rag_db:/app/backend/rag_db
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     command: >
       sh -c "
-        echo '💪 Starting Celery Workers...' &&
+        echo '🧠 Starting AI Worker...' &&
         celery -A backend.workers.celery_app worker 
           --loglevel=info 
-          --concurrency=4
-          --max-tasks-per-child=1000
-          --time-limit=300
-          --queues=voice,ai,whatsapp,monitoring
+          --concurrency=2
+          --max-tasks-per-child=100
+          --prefetch-multiplier=1
+          --queues=ai,default
+          --hostname=worker-ai@%h
+          --without-heartbeat
+          --without-mingle
       "
     restart: unless-stopped
     networks:
       - agriconnect-network
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.workers.celery_app inspect ping --destination worker-ai@$HOSTNAME 2>/dev/null | grep -q pong"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
-          memory: 1G
-          cpus: '0.75'
+          memory: 1.5G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+
+  # Worker Voice/WhatsApp — I/O-bound (Azure Speech, Twilio)
+  celery-worker-io:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: agriconnect-worker-io
+    environment:
+      DATABASE_URL: postgresql://agriconnect:${DB_PASSWORD}@postgres:5432/agriconnect_prod
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      AZURE_SPEECH_KEY: ${AZURE_SPEECH_KEY}
+      AZURE_SPEECH_KEY_2: ${AZURE_SPEECH_KEY_2}
+      AZURE_REGION: ${AZURE_REGION:-westeurope}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+    volumes:
+      - ./backend:/app/backend
+      - audio_files:/app/audio_files
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo '🔊 Starting I/O Worker (voice + whatsapp)...' &&
+        celery -A backend.workers.celery_app worker 
+          --loglevel=info 
+          --concurrency=4
+          --max-tasks-per-child=500
+          --prefetch-multiplier=2
+          --queues=voice,whatsapp
+          --hostname=worker-io@%h
+      "
+    restart: unless-stopped
+    networks:
+      - agriconnect-network
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.workers.celery_app inspect ping --destination worker-io@$HOSTNAME 2>/dev/null | grep -q pong"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # Worker Monitoring/Maintenance — tâches périodiques légères
+  celery-worker-ops:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: agriconnect-worker-ops
+    environment:
+      DATABASE_URL: postgresql://agriconnect:${DB_PASSWORD}@postgres:5432/agriconnect_prod
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+    volumes:
+      - ./backend:/app/backend
+      - audio_files:/app/audio_files
+      - rag_db:/app/backend/rag_db
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo '🔧 Starting Ops Worker (monitoring + maintenance)...' &&
+        celery -A backend.workers.celery_app worker 
+          --loglevel=info 
+          --concurrency=2
+          --max-tasks-per-child=200
+          --prefetch-multiplier=4
+          --queues=monitoring,maintenance
+          --hostname=worker-ops@%h
+      "
+    restart: unless-stopped
+    networks:
+      - agriconnect-network
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.workers.celery_app inspect ping --destination worker-ops@$HOSTNAME 2>/dev/null | grep -q pong"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
 
   # ============================================
   # 5. INGESTION (SCRAPER - Scheduled Job)

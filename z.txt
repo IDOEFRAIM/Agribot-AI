@@ -1,91 +1,17 @@
-🏛️ 1. ARCHITECTURE.doc (Le "Quoi" et le "Pourquoi")
-C’est le document pour les Décideurs et Architectes.
+Apollo Agriculture (Kenya) : Ils utilisent le machine learning pour évaluer le crédit des agriculteurs et débloquer des semences/engrais automatiquement. Bien que plus orienté vers le SMS/App, la logique de "donnée -> action automatique" est là.
 
-Le fit : En montrant votre schéma Mermaid et le rôle des agents (Sentinelle, Coach, etc.), vous prouvez que vous maîtrisez la conception de systèmes complexes. Pour une Fintech, cela rassure sur la modularité et la capacité du système à évoluer sans tout casser.
+Viamo : Très présent en Afrique (dont le Burkina Faso), ils utilisent des serveurs vocaux interactifs (IVR). L'étape suivante, sur laquelle tu travailles, est de remplacer les menus rigides ("Tapez 1, Tapez 2") par des agents IA flexibles sur WhatsApp.
 
----
+Digital Green : Ils testent des agents IA (Farmer.Chat) qui permettent aux agriculteurs de poser des questions sur leurs cultures et d'obtenir des réponses basées sur des bases de données de recherche agricole locales (RAG).# Tests offline (évaluateurs seulement — pas d'API)
+pytest tests/test_langsmith_agents.py::TestEvaluators -v
 
-🚦 **3.3 Tier 3 : Action (Exécution Asynchrone)**
+# Tests live complets (appels LLM réels, tracés dans LangSmith)
+pytest tests/test_langsmith_agents.py --run-live -v
 
-Cette couche gère la communication avec l'utilisateur final, souvent situé en zone rurale :
+# Script d'évaluation CLI avec rapport
+python scripts/run_evaluation.py
+python scripts/run_evaluation.py --agent sentinelle
+python scripts/run_evaluation.py --category security -v
 
-- **Asynchronisme massif** : Grâce à Redis (broker) et Celery (queue), le système peut traiter des milliers de requêtes vocales ou WhatsApp en parallèle, sans ralentir l'API principale. Cela garantit une expérience fluide même en cas de pics de trafic (campagnes, alertes météo, etc.).
-- **Omnicanalité & Accessibilité** :
-  - **WhatsApp (Twilio)** : Permet d'envoyer des messages texte, audio, images, et documents directement aux agriculteurs, même sans smartphone moderne.
-  - **Synthèse Vocale (Azure TTS)** : Génère des messages vocaux personnalisés dans la langue locale, contournant les barrières d'analphabétisme.
-  - **API REST** : Pour intégration avec d'autres plateformes (gouvernement, ONG, partenaires).
-- **Tâches gérées** :
-  - Génération vocale (Azure TTS)
-  - Envoi WhatsApp/SMS (Twilio)
-  - Monitoring climatique continu (alertes météo proactives)
-  - Nettoyage automatique des fichiers audio temporaires
-- **Robustesse** :
-  - Chaque tâche est isolée : une erreur sur un canal (ex : WhatsApp down) n'impacte pas les autres.
-  - Retry automatique, logs détaillés, monitoring via Flower.
-- **Scalabilité** :
-  - Ajout de workers = montée en charge linéaire (Docker Compose ou Kubernetes).
-  - Peut passer de 100 à 100 000 utilisateurs sans refonte.
-- **Sécurité & Confidentialité** :
-  - Les messages et fichiers audio sont stockés temporairement puis supprimés (nettoyage automatique).
-  - Les credentials (Twilio, Azure) sont sécurisés via variables d'environnement.
-
-**Résumé pour le rapport** :
-La couche Action d'AgriConnect est conçue pour garantir l'accessibilité maximale (voix, WhatsApp), la robustesse (asynchronisme, retry, monitoring), et la scalabilité nationale. Elle permet de délivrer l'IA même dans les zones rurales à faible connectivité, tout en assurant la confidentialité et la traçabilité des échanges.
-
----
-
-```mermaid
-flowchart TD
-    subgraph "TIER 3: ACTION (Async Workers)"
-        C1[Celery Workers\n4+ concurrents]
-        C2[Voice Task\nAzure TTS]
-        C3[AI Task\nOrchestration]
-        C4[WhatsApp Task\nTwilio]
-        C5[Monitoring Task]
-        C6[Maintenance Task\nCleanup Audio]
-        REDIS[(Redis 7\nBroker)]
-        REDIS --> C1
-        C1 --> C2 & C3 & C4 & C5 & C6
-    end
-    USER[👨‍🌾 Paysan] <-- WhatsApp/Voix --> C4
-    C2 --> USER
-    style C1 fill:#f8bbd0
-    style C2 fill:#e1bee7
-    style C4 fill:#ffe082
-    style C5 fill:#b2dfdb
-    style C6 fill:#cfd8dc
-```
-
-```mermaid
-flowchart TD
-    subgraph "TIER 2: ORCHESTRATION (The Brain)"
-        B1[FastAPI Gateway\nPort 8000]
-        B2[MainOrchestrator\n(Router, State)]
-        B3[ClimateSentinel\n(Agent météo)]
-        B4[PlantHealthDoctor\n(Agent diagnostic plante)]
-        B5[MarketCoach\n(Agent marché)]
-        B6[FormationCoach\n(Agent formation)]
-        B7[RAG System\n(LlamaIndex + pgvector)]
-        DB[(PostgreSQL 16\n+ pgvector)]
-        REDIS[(Redis 7\nBroker)]
-        
-        B1 --> B2
-        B2 --> B3 & B4 & B5 & B6
-        B3 & B4 & B5 & B6 --> B7
-        DB --> B7
-        B7 --> REDIS
-        
-        %% Flux proactifs
-        B3 -.->|"write: alerts"| DB
-        B4 -.->|"write: diagnoses"| DB
-        B5 -.->|"write: surplus"| DB
-        B6 -.->|"write: user_crops"| DB
-    end
-    USER[👨‍🌾 Paysan] --> B1
-    style B2 fill:#fff9c4
-    style B3 fill:#b3e5fc
-    style B4 fill:#c8e6c9
-    style B5 fill:#ffe082
-    style B6 fill:#d1c4e9
-    style B7 fill:#f8bbd0
-```
+# Upload datasets vers LangSmith uniquement
+python scripts/run_evaluation.py --upload-only

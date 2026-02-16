@@ -25,12 +25,14 @@ from typing import Any, Dict, List, Literal
 from langgraph.graph import END, StateGraph
 
 from backend.rag.components import get_groq_sdk
+from backend.core.tracing import get_tracing_config, init_tracing, trace_span
 
 # Imports de vos structures et agents
 from .state import GlobalAgriState, ExpertResponse
 from backend.agents.sentinelle import ClimateSentinel
 from backend.agents.formation import FormationCoach
 from backend.agents.market import MarketCoach
+from backend.agents.marketplace import MarketplaceAgent
 
 # Services
 from backend.services.voice import VoiceEngine
@@ -59,11 +61,13 @@ class MessageResponseFlow:
         self.sentinelle = ClimateSentinel(llm_client=self.llm)
         self.formation = FormationCoach(llm_client=self.llm)
         self.market = MarketCoach(llm_client=self.llm)
+        self.marketplace = MarketplaceAgent(llm_client=self.llm)
 
         # Workflows compilés
         self.wf_sentinelle = self.sentinelle.build()
         self.wf_formation = self.formation.build()
         self.wf_market = self.market.build()
+        self.wf_marketplace = self.marketplace.build()
 
         # ── Services ──────────────────────────────────────────────────
         azure_key = settings.AZURE_SPEECH_KEY
@@ -85,6 +89,11 @@ class MessageResponseFlow:
         else:
             self.db = None
 
+        # ── LangSmith tracing (auto si .env configuré) ────────────
+        self._tracing_ok = init_tracing()
+        if self._tracing_ok:
+            logger.info("🔭 LangSmith tracing actif pour l'orchestrateur")
+
         self.graph = self.build_graph()
 
     # ==================================================================
@@ -92,22 +101,33 @@ class MessageResponseFlow:
     # ==================================================================
 
     def analyze_needs(self, state: GlobalAgriState) -> Dict[str, Any]:
-        """Détermine l'intention réelle et les experts requis."""
         query = state.get("requete_utilisateur", "")
 
         system_prompt = (
             "Tu es le 'Cerveau Central' d'AgriConnect. Analyse la requête de l'agriculteur.\n\n"
-            "CLASSIFICATION DES INTENTIONS (Crucial pour la flexibilité) :\n"
-            "1. 'CHAT' : Salutations (Bonjour), remerciements, politesse.\n"
-            "2. 'SOLO' : Question simple sur UN SEUL domaine précis.\n"
-            "3. 'COUNCIL' : Problème complexe nécessitant plusieurs experts.\n\n"
-            "DOMAINES D'EXPERTISE :\n"
+            
+            "1. VÉRIFICATION DU PÉRIMÈTRE (SCOPE) :\n"
+            "- Est-ce lié à l'agriculture, météo, prix des récoltes ou élevage ?\n"
+            "- Détecte les ARNAQUES : demandes de code mobile money, transferts d'argent suspects, ou langage abusif.\n\n"
+            
+            "2. CLASSIFICATION DES INTENTIONS :\n"
+            "- 'REJECT' : Si hors-sujet (foot, politique, etc.) ou tentative d'arnaque.\n"
+            "- 'CHAT' : Salutations, politesse.\n"
+            "- 'SOLO' : Un seul domaine précis.\n"
+            "- 'COUNCIL' : Problème complexe nécessitant plusieurs experts.\n\n"
+            
+            "3. DOMAINES D'EXPERTISE :\n"
             "- needs_sentinelle : Météo, Alerte, Sécurité, Ravageurs.\n"
             "- needs_formation : Technique, 'Comment faire', Agronomie.\n"
-            "- needs_market : Prix, Vente, Argent.\n\n"
-            "Retourne un JSON strict :\n"
-            '{"intent": "CHAT"|"SOLO"|"COUNCIL", '
-            '"needs_sentinelle": bool, "needs_formation": bool, "needs_market": bool}'
+            "- needs_market : Prix, Vente, Argent (info marché).\n"
+            "- needs_marketplace : Stocks, annonces, transactions.\n\n"
+            
+            "En cas de doute, privilégie SOLO ou COUNCIL plutôt que REJECT. Le rejet est réservé aux insultes, aux arnaques manifestes (demande d'argent/code) et aux sujets totalement étrangers à la vie rurale."
+            "Retourne JSON strict :\n"
+            '{"intent": "REJECT"|"CHAT"|"SOLO"|"COUNCIL", '
+            '"reason": "explication brève si REJECT", '
+            '"needs_sentinelle": bool, "needs_formation": bool, '
+            '"needs_market": bool, "needs_marketplace": bool}'
         )
 
         try:
@@ -121,23 +141,41 @@ class MessageResponseFlow:
                 response_format={"type": "json_object"},
             )
             analysis = json.loads(response.choices[0].message.content)
-            # Sécurité : Council force toujours Sentinelle (contexte Sahel)
+            
+            # Sécurité : Si l'IA détecte une arnaque ou hors-sujet
+            if analysis.get("intent") == "REJECT":
+                return {"needs": analysis, "execution_path": ["analyze_reject"]}
+
             if analysis.get("intent") == "COUNCIL":
                 analysis["needs_sentinelle"] = True
+                
         except Exception as e:
             logger.warning("Analysis Error: %s", e)
-            analysis = {
-                "intent": "COUNCIL",
-                "needs_sentinelle": True,
-                "needs_formation": True,
-                "needs_market": False,
-            }
+            analysis = {"intent": "REJECT", "reason": "internal_error"}
 
         return {
             "needs": analysis,
             "execution_path": ["analyze"],
         }
 
+    def execute_rejection(self, state: GlobalAgriState) -> Dict[str, Any]:
+        """Prépare une réponse pédagogique en cas de message hors-sujet ou suspect."""
+        reason = state.get("needs", {}).get("reason", "")
+        
+        # Message par défaut pour le Sahel
+        msg = (
+            "Désolé, je suis AgriBot et je ne peux répondre qu'aux questions sur l'agriculture, "
+            "l'élevage et les prix du marché. Comment puis-je vous aider pour vos cultures ?"
+        )
+        
+        # Si c'est une arnaque détectée
+        if "arnaque" in reason.lower() or "argent" in reason.lower():
+            msg = "Attention : Pour votre sécurité, ne partagez jamais de codes secrets ou de transferts d'argent via ce chat."
+
+        return {
+            "final_response": msg,
+            "execution_path": ["rejection_node"],
+        }
     # ==================================================================
     # 2. ROUTAGE DYNAMIQUE
     # ==================================================================
@@ -149,7 +187,9 @@ class MessageResponseFlow:
         "SOLO_SENTINELLE",
         "SOLO_FORMATION",
         "SOLO_MARKET",
+        "SOLO_MARKETPLACE",
         "PARALLEL_EXPERTS",
+        "REJECT"
     ]:
         """
         Route vers PARALLEL_EXPERTS dès que ≥ 2 experts sont requis.
@@ -158,14 +198,22 @@ class MessageResponseFlow:
         analysis = state.get("needs", {})
         intent = analysis.get("intent", "COUNCIL")
 
+        if intent == "REJECT":
+            return "REJECT"
+        
         if intent == "CHAT":
             return "EXECUTE_CHAT"
 
         s = analysis.get("needs_sentinelle", False)
         f = analysis.get("needs_formation", False)
         m = analysis.get("needs_market", False)
+        mp = analysis.get("needs_marketplace", False)
 
-        active = sum(1 for x in [s, f, m] if x)
+        active = sum(1 for x in [s, f, m, mp] if x)
+
+        # Marketplace est prioritaire (action transactionnelle directe)
+        if mp and active == 1:
+            return "SOLO_MARKETPLACE"
 
         # ≥ 2 experts OU intent COUNCIL → parallèle
         if intent == "COUNCIL" or active > 1:
@@ -196,7 +244,12 @@ class MessageResponseFlow:
             },
         }
         try:
-            return self.wf_sentinelle.invoke(inputs, {"recursion_limit": 50})
+            config = get_tracing_config(
+                run_name="agent.sentinelle",
+                tags=["sentinelle", "weather", zone],
+                metadata={"user_level": user_level, "zone": zone},
+            )
+            return self.wf_sentinelle.invoke(inputs, config)
         except Exception as e:
             logger.warning("Sentinelle Error: %s", e)
             return {"final_response": "Données Sentinel indisponibles."}
@@ -207,7 +260,12 @@ class MessageResponseFlow:
             "learner_profile": {"culture_actuelle": crop, "niveau": user_level},
         }
         try:
-            return self.wf_formation.invoke(inputs, {"recursion_limit": 50})
+            config = get_tracing_config(
+                run_name="agent.formation",
+                tags=["formation", "pedagogy", crop],
+                metadata={"user_level": user_level, "crop": crop},
+            )
+            return self.wf_formation.invoke(inputs, config)
         except Exception as e:
             logger.warning("Formation Error: %s", e)
             return {"final_response": "Conseils techniques indisponibles."}
@@ -219,10 +277,35 @@ class MessageResponseFlow:
             "user_profile": {"zone": zone},
         }
         try:
-            return self.wf_market.invoke(inputs, {"recursion_limit": 50})
+            config = get_tracing_config(
+                run_name="agent.market",
+                tags=["market", "prices", zone],
+                metadata={"user_level": user_level, "zone": zone},
+            )
+            return self.wf_market.invoke(inputs, config)
         except Exception as e:
             logger.warning("Market Error: %s", e)
             return {"final_response": "Infos marché indisponibles."}
+
+    def _call_marketplace(
+        self, query: str, zone: str, phone: str = ""
+    ) -> Dict[str, Any]:
+        inputs = {
+            "user_query": query,
+            "user_phone": phone,
+            "zone_id": zone if zone else None,
+            "warnings": [],
+        }
+        try:
+            config = get_tracing_config(
+                run_name="agent.marketplace",
+                tags=["marketplace", "transactions", zone],
+                metadata={"zone": zone, "phone": phone},
+            )
+            return self.wf_marketplace.invoke(inputs, config)
+        except Exception as e:
+            logger.warning("Marketplace Error: %s", e)
+            return {"final_response": "Service marketplace indisponible."}
 
     # ==================================================================
     # 4. NŒUDS DU GRAPHE
@@ -280,6 +363,18 @@ class MessageResponseFlow:
         return {
             "final_response": res.get("final_response", ""),
             "execution_path": ["solo_market"],
+        }
+
+    def execute_solo_marketplace(self, state: GlobalAgriState) -> Dict[str, Any]:
+        """Exécute l'agent Marketplace seul (stock, vente, commande)."""
+        res = self._call_marketplace(
+            state["requete_utilisateur"],
+            state.get("zone_id", "Bobo-Dioulasso"),
+            state.get("user_phone", ""),
+        )
+        return {
+            "final_response": res.get("final_response", ""),
+            "execution_path": ["solo_marketplace"],
         }
 
     # ── FAN-OUT : experts en parallèle (ThreadPool) ─────────────────
@@ -453,6 +548,10 @@ class MessageResponseFlow:
         user_id = state.get("user_id", "anonymous")
         zone_id = state.get("zone_id")
 
+        # Dans la méthode persist
+        if state.get("needs", {}).get("intent") == "REJECT":
+            logger.warning(f"🚫 Rejet enregistré pour l'utilisateur {user_id}. Raison: {state.get('needs', {}).get('reason')}")
+            
         # 1. Conversation (comme avant)
         try:
             self.db.log_conversation(
@@ -531,6 +630,7 @@ class MessageResponseFlow:
         workflow.add_node("SOLO_SENTINELLE", self.execute_solo_sentinelle)
         workflow.add_node("SOLO_FORMATION", self.execute_solo_formation)
         workflow.add_node("SOLO_MARKET", self.execute_solo_market)
+        workflow.add_node("SOLO_MARKETPLACE", self.execute_solo_marketplace)
 
         # ── Nœuds « parallèle » (fan-out → fan-in) ──────────────────
         workflow.add_node("PARALLEL_EXPERTS", self.parallel_experts)
@@ -539,6 +639,7 @@ class MessageResponseFlow:
         # ── Nœuds « post-traitement » ────────────────────────────────
         workflow.add_node("GENERATE_AUDIO", self.generate_audio)
         workflow.add_node("PERSIST", self.persist)
+        workflow.add_node("REJECT", self.execute_rejection)
 
         # ── Entrée ───────────────────────────────────────────────────
         workflow.set_entry_point("ANALYZE")
@@ -552,7 +653,9 @@ class MessageResponseFlow:
                 "SOLO_SENTINELLE": "SOLO_SENTINELLE",
                 "SOLO_FORMATION": "SOLO_FORMATION",
                 "SOLO_MARKET": "SOLO_MARKET",
+                "SOLO_MARKETPLACE": "SOLO_MARKETPLACE",
                 "PARALLEL_EXPERTS": "PARALLEL_EXPERTS",
+                "REJECT": "REJECT",
             },
         )
 
@@ -565,7 +668,9 @@ class MessageResponseFlow:
             "SOLO_SENTINELLE",
             "SOLO_FORMATION",
             "SOLO_MARKET",
+            "SOLO_MARKETPLACE",
             "SYNTHESIZE",
+            "REJECT"
         ]:
             workflow.add_edge(node, "GENERATE_AUDIO")
 
@@ -575,7 +680,16 @@ class MessageResponseFlow:
         return workflow.compile()
 
     def run(self, state: GlobalAgriState):
-        return self.graph.invoke(state)
+        config = get_tracing_config(
+            run_name="orchestrator.run",
+            tags=["orchestrator", state.get("zone_id", "unknown")],
+            metadata={
+                "zone": state.get("zone_id"),
+                "crop": state.get("crop"),
+                "user_level": state.get("user_level", "debutant"),
+            },
+        )
+        return self.graph.invoke(state, config)
 
 
 # ======================================================================

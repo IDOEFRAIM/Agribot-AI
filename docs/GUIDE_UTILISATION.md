@@ -5,10 +5,10 @@
 ### 1. Tester l'Orchestrateur Principal
 
 ```python
-from backend.orchestrator.main_orchestrator import AgribotMainOrchestrator
+from backend.orchestrator.message_flow import MessageResponseFlow
 
 # Initialisation
-orchestrator = AgribotMainOrchestrator()
+orchestrator = MessageResponseFlow()
 
 # Cas 1: Question normale
 result = orchestrator.process_user_request(
@@ -320,7 +320,7 @@ import pytest
 from backend.orchestrator.main_orchestrator import AgribotMainOrchestrator
 
 def test_greeting_response():
-    orchestrator = AgribotMainOrchestrator()
+    orchestrator = MessageResponseFlow()
     result = orchestrator.process_user_request("Bonjour")
     
     assert result['status'] == 'SUCCESS'

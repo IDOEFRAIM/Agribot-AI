@@ -74,6 +74,19 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_WHATSAPP_NUMBER: str = ""
 
+    # --- LangSmith / Observabilité ---
+    LANGCHAIN_TRACING_V2: bool = False
+    LANGCHAIN_API_KEY: str = ""
+    LANGCHAIN_PROJECT: str = "agriconnect"
+    LANGCHAIN_ENDPOINT: str = "https://api.smith.langchain.com"
+    LANGSMITH_API_KEY: str = ""
+
+    @property
+    def langsmith_enabled(self) -> bool:
+        """True si le tracing LangSmith est activé et configuré."""
+        key = self.LANGCHAIN_API_KEY or self.LANGSMITH_API_KEY
+        return bool(self.LANGCHAIN_TRACING_V2 and key)
+
     # --- RAG (adaptatif par profil) ---
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
     CHUNK_SIZE: int = 512
@@ -102,3 +115,18 @@ class Settings(BaseSettings):
 
 # Singleton — importable partout
 settings = Settings()
+
+
+# ── LangSmith : exporter les variables d'environnement ───────────────
+# LangChain / LangGraph lisent ces variables automatiquement.
+# On les exporte ici pour que tout .invoke() soit tracé sans code additionnel.
+def _bootstrap_langsmith():
+    if not settings.langsmith_enabled:
+        return
+    _key = settings.LANGCHAIN_API_KEY or settings.LANGSMITH_API_KEY
+    os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+    os.environ.setdefault("LANGCHAIN_API_KEY", _key)
+    os.environ.setdefault("LANGCHAIN_PROJECT", settings.LANGCHAIN_PROJECT)
+    os.environ.setdefault("LANGCHAIN_ENDPOINT", settings.LANGCHAIN_ENDPOINT)
+
+_bootstrap_langsmith()
