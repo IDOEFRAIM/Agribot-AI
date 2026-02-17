@@ -23,8 +23,6 @@ from typing import Any, Dict, Optional
 from celery import Task
 from celery.exceptions import (
     MaxRetriesExceededError,
-    Reject,
-    SoftTimeLimitExceeded,
 )
 
 logger = logging.getLogger("AgriConnect.tasks")

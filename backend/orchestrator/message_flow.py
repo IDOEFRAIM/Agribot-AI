@@ -40,6 +40,14 @@ from backend.services.db_handler import AgriDatabase
 from backend.core.settings import settings
 from backend.core.database import _engine, _SessionLocal
 
+# Mémoire 3 niveaux (Profil + Épisodique + Optimiseur)
+from backend.services.memory import (
+    UserFarmProfile,
+    ProfileExtractor,
+    EpisodicMemory,
+    ContextOptimizer,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -89,6 +97,19 @@ class MessageResponseFlow:
         else:
             self.db = None
 
+        # ── Mémoire 3 niveaux ─────────────────────────────────────
+        self.memory = None
+        session_factory = _SessionLocal if _SessionLocal else None
+        if session_factory:
+            try:
+                _profile = UserFarmProfile(session_factory)
+                _episodic = EpisodicMemory(session_factory, llm_client=self.llm)
+                _extractor = ProfileExtractor(self.llm, _profile)
+                self.memory = ContextOptimizer(_profile, _episodic, _extractor)
+                logger.info("🧠 Mémoire 3 niveaux activée (Profil + Épisodique + Optimiseur)")
+            except Exception as e:
+                logger.warning("⚠️  Mémoire désactivée: %s", e)
+
         # ── LangSmith tracing (auto si .env configuré) ────────────
         self._tracing_ok = init_tracing()
         if self._tracing_ok:
@@ -102,6 +123,13 @@ class MessageResponseFlow:
 
     def analyze_needs(self, state: GlobalAgriState) -> Dict[str, Any]:
         query = state.get("requete_utilisateur", "")
+
+        # ── Mémoire : enrichir le state avec profil + épisodes ──
+        if self.memory:
+            try:
+                state = self.memory.enrich_state(state)
+            except Exception as e:
+                logger.debug("Memory enrich skipped: %s", e)
 
         system_prompt = (
             "Tu es le 'Cerveau Central' d'AgriConnect. Analyse la requête de l'agriculteur.\n\n"
@@ -571,6 +599,29 @@ class MessageResponseFlow:
                 self._persist_expert_action(expert, state, user_id, zone_id)
             except Exception as e:
                 logger.warning("DB persist error (%s): %s", expert, e)
+
+        # 3. Mémoire épisodique : enregistrer un résumé de l'interaction
+        if self.memory:
+            try:
+                intent = state.get("needs", {}).get("intent")
+                # Déterminer le type d'agent lead
+                lead_expert = "general"
+                for resp in state.get("expert_responses", []):
+                    if resp.get("is_lead"):
+                        lead_expert = resp.get("expert", "general")
+                        break
+
+                self.memory.record_interaction(
+                    user_id=user_id,
+                    query=state.get("requete_utilisateur", ""),
+                    response=state.get("final_response", ""),
+                    agent_type=lead_expert,
+                    crop=state.get("crop"),
+                    zone=zone_id,
+                    intent=intent,
+                )
+            except Exception as e:
+                logger.warning("Episodic memory record error: %s", e)
 
         return {}
 

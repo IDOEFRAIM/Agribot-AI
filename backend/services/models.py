@@ -486,3 +486,13 @@ class MarketAlert(Base):
             "zone_id": self.zone_id, "buyer_phone": self.buyer_phone,
             "status": self.status,
         }
+
+
+# ══════════════════════════════════════════════════════════════
+# MÉMOIRE 3 NIVEAUX — Modèles importés
+# ══════════════════════════════════════════════════════════════
+# Les modèles UserFarmProfileModel et EpisodicMemoryModel sont
+# définis dans backend/services/memory/ et importés ici pour
+# que SQLAlchemy les découvre via Base.metadata.
+from backend.services.memory.user_profile import UserFarmProfileModel
+from backend.services.memory.episodic_memory import EpisodicMemoryModel

@@ -62,5 +62,11 @@ class GlobalAgriState(TypedDict):
     # --- Audio Output ---
     audio_url: Optional[str]  # Chemin du fichier .wav généré par TTS
 
+    # --- Mémoire 3 Niveaux (injectés par ContextOptimizer) ---
+    memory_profile: Optional[str]       # Niveau 1: Fiche Ferme JSON (~80 tokens)
+    memory_episodes: Optional[str]      # Niveau 2: Résumés épisodiques (~120 tokens)
+    memory_context: Optional[str]       # Combiné: Profil + Épisodes (~200 tokens)
+    memory_token_estimate: Optional[int] # Estimation tokens du contexte mémoire
+
     # --- Community Benchmark (reports) ---
     community_benchmark: Optional[Dict[str, Any]]

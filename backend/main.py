@@ -17,6 +17,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from backend.api.routes import router
+
 from backend.core.settings import settings
 from backend.core.logger import setup_logging
 from backend.core.database import init_db, close_db
@@ -73,7 +75,6 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # ── Routes ───────────────────────────────────────────────────
-from backend.api.routes import router  # noqa: E402
 
 app.include_router(router)
 
