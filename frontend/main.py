@@ -20,8 +20,8 @@ def query_backend(user_query, user_id, zone_id, crop, mode, user_level):
     flow_type = "REPORT" if mode == "Daily Report" else "MESSAGE"
 
     payload = {
-        "user_id": user_id or "user_gradio",
-        "zone_id": zone_id or "boromo",
+        "user_id": user_id or "cmludrpen00009s93aw0316t2",
+        "zone_id": zone_id or "ouaga",
         "crop": crop or "Inconnue",
         "query": user_query or "Generate Report",
         "flow_type": flow_type,
@@ -67,10 +67,10 @@ with gr.Blocks(title="AgConnect - Assistant Agricole") as demo:
 
     with gr.Row():
         with gr.Column(scale=1):
-            user_id = gr.Textbox(label="User ID", value="farmer_001")
+            user_id = gr.Textbox(label="User ID", value="cmludrpen00009s93aw0316t2")
             zone_id = gr.Dropdown(
-                choices=["Centre", "Nord", "Sud", "Bobo-Dioulasso"],
-                value="Bobo-Dioulasso", label="Zone",
+                choices=["gaoua", "ziniare", "ouaga", "banfora"],
+                value="banfora", label="Zone",
             )
             crop = gr.Dropdown(
                 choices=["Maïs", "Coton", "Sésame", "Sorgho", "Riz"],

@@ -17,45 +17,70 @@ Base = declarative_base()
 
 
 class Zone(Base):
+    """Zone géographique — partagée entre Prisma (web) et SQLAlchemy (agents)."""
     __tablename__ = "zones"
 
     id = Column(String, primary_key=True)
-    name = Column(String, nullable=False)
-    region = Column(String, nullable=False)
-    coordinates = Column(JSON)
-    agro_type = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    name = Column(String, unique=True, nullable=False)
+    code = Column(String, unique=True)
+    climatic_region_id = Column("climaticRegionId", String, ForeignKey("climatic_regions.id"))
+    latitude = Column(Float)
+    longitude = Column(Float)
+    is_active = Column("isActive", Boolean, default=True)
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     def to_dict(self):
         return {
             "id": self.id,
             "name": self.name,
-            "region": self.region,
-            "agro_type": self.agro_type,
+            "code": self.code,
+            "climatic_region_id": self.climatic_region_id,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "is_active": self.is_active,
         }
 
 
 class User(Base):
+    """Utilisateur — partagé entre Prisma (web) et SQLAlchemy (agents)."""
     __tablename__ = "users"
 
     id = Column(String, primary_key=True)
-    phone = Column(String, unique=True, nullable=False)
     name = Column(String)
-    language = Column(String, default="fr")
-    zone_id = Column(String, ForeignKey("zones.id"))
-    is_onboarded = Column(Boolean, default=False)
-    voice_preference = Column(String, default="fr-FR-HenriNeural")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    email = Column(String, unique=True)
+    email_verified = Column("emailVerified", DateTime(timezone=True))
+    image = Column(String)
+    password = Column(String)
+    phone = Column(String, unique=True)
+    role = Column(String, default="USER")
+    zone_id = Column("zoneId", String, ForeignKey("zones.id"))
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
+
+    # --- Propriétés Python-only (pas en DB, compat agents) ---
+    @property
+    def language(self) -> str:
+        """Langue par défaut — non stockée dans Prisma."""
+        return "fr"
+
+    @property
+    def is_onboarded(self) -> bool:
+        """Tous les users Prisma sont considérés onboardés."""
+        return True
+
+    @property
+    def voice_preference(self) -> str:
+        return "fr-FR-HenriNeural"
 
     def to_dict(self):
         return {
             "id": self.id,
             "phone": self.phone,
             "name": self.name,
+            "email": self.email,
+            "role": self.role,
             "zone_id": self.zone_id,
-            "language": self.language,
-            "is_onboarded": self.is_onboarded,
-            "voice_preference": self.voice_preference,
         }
 
 
@@ -133,14 +158,41 @@ class WeatherData(Base):
 
 
 class Conversation(Base):
-    """Historique des échanges pour mémoire conversationnelle."""
+    """
+    Historique des échanges — partagé entre Prisma (web/dashboard) et SQLAlchemy (agents).
+    Colonne names match Prisma exactement (camelCase dans la DB).
+    """
     __tablename__ = "conversations"
 
     id = Column(String, primary_key=True)
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"))
-    channel = Column(String, default="api")          # api | whatsapp | sms
-    status = Column(String, default="ACTIVE")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    user_id = Column("userId", String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    # --- Contenu du message ---
+    query = Column(Text, nullable=False, default="")
+    response = Column(Text)
+
+    # --- Contexte métier ---
+    agent_type = Column("agentType", String)
+    crop = Column(String)
+    zone_id = Column("zoneId", String, ForeignKey("zones.id"))
+
+    # --- Mode de communication ---
+    mode = Column(String, default="text")
+    audio_url = Column("audioUrl", String)
+
+    # --- Slot Filling / Context Elicitation ---
+    is_waiting_for_input = Column("isWaitingForInput", Boolean, default=False)
+    missing_slots = Column("missingSlots", JSON)
+
+    # --- Monitoring & Audit ---
+    execution_path = Column("executionPath", JSON)
+    confidence_score = Column("confidenceScore", Float)
+    total_tokens_used = Column("totalTokensUsed", Integer, default=0)
+    response_time_ms = Column("responseTimeMs", Integer)
+    audit_trail_id = Column("auditTrailId", String, unique=True)
+
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
 
 class ConversationMessage(Base):
@@ -278,11 +330,35 @@ class ClimaticRegion(Base):
     id = Column(String, primary_key=True)
     name = Column(String, unique=True, nullable=False)
     description = Column(Text)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     def to_dict(self):
         return {"id": self.id, "name": self.name, "description": self.description}
+
+
+class Client(Base):
+    """Client d'un producteur (Prisma: @@map 'clients')."""
+    __tablename__ = "clients"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    phone = Column(String, nullable=False, index=True)
+    email = Column(String)
+    location = Column(String)
+    total_orders = Column("totalOrders", Integer, default=0)
+    total_spent = Column("totalSpent", Float, default=0)
+    last_order_date = Column("lastOrderDate", DateTime(timezone=True))
+    producer_id = Column("producerId", String, ForeignKey("producers.id"), nullable=False, index=True)
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "name": self.name, "phone": self.phone,
+            "email": self.email, "producer_id": self.producer_id,
+            "total_orders": self.total_orders, "total_spent": self.total_spent,
+        }
 
 
 class Producer(Base):
@@ -290,15 +366,15 @@ class Producer(Base):
     __tablename__ = "producers"
 
     id = Column(String, primary_key=True)
-    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), unique=True)
-    business_name = Column(String)
+    user_id = Column("userId", String, ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    business_name = Column("businessName", String)
     status = Column(String, default="ACTIVE")      # PENDING | ACTIVE | SUSPENDED
-    zone_id = Column(String, ForeignKey("zones.id"))
+    zone_id = Column("zoneId", String, ForeignKey("zones.id"))
     region = Column(String)
     province = Column(String)
     commune = Column(String)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     def to_dict(self):
         return {
@@ -316,12 +392,12 @@ class Farm(Base):
     name = Column(String, nullable=False)
     location = Column(String)
     size = Column(Float)                 # hectares
-    soil_type = Column(String)
-    water_source = Column(String)
-    zone_id = Column(String, ForeignKey("zones.id"))
-    producer_id = Column(String, ForeignKey("producers.id", ondelete="CASCADE"))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    soil_type = Column("soilType", String)
+    water_source = Column("waterSource", String)
+    zone_id = Column("zoneId", String, ForeignKey("zones.id"))
+    producer_id = Column("producerId", String, ForeignKey("producers.id", ondelete="CASCADE"))
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     def to_dict(self):
         return {
@@ -336,13 +412,13 @@ class Stock(Base):
     __tablename__ = "stocks"
 
     id = Column(String, primary_key=True)
-    farm_id = Column(String, ForeignKey("farms.id", ondelete="CASCADE"))
-    item_name = Column(String, nullable=False)
+    farm_id = Column("farmId", String, ForeignKey("farms.id", ondelete="CASCADE"))
+    item_name = Column("itemName", String, nullable=False)
     quantity = Column(Float, default=0)
     unit = Column(String, default="kg")
     type = Column(String, default="HARVEST")   # INPUT | HARVEST | EQUIPMENT
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     def to_dict(self):
         return {
@@ -357,11 +433,11 @@ class StockMovement(Base):
     __tablename__ = "stock_movements"
 
     id = Column(String, primary_key=True)
-    stock_id = Column(String, ForeignKey("stocks.id", ondelete="CASCADE"))
+    stock_id = Column("stockId", String, ForeignKey("stocks.id", ondelete="CASCADE"))
     type = Column(String, nullable=False)    # IN | OUT | WASTE
     quantity = Column(Float, nullable=False)
     reason = Column(String)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
 
     def to_dict(self):
         return {
@@ -375,7 +451,7 @@ class Expense(Base):
     __tablename__ = "expenses"
 
     id = Column(String, primary_key=True)
-    farm_id = Column(String, ForeignKey("farms.id", ondelete="CASCADE"))
+    farm_id = Column("farmId", String, ForeignKey("farms.id", ondelete="CASCADE"))
     label = Column(String, nullable=False)
     amount = Column(Float, nullable=False)
     category = Column(String, default="OTHER")   # LABOUR | FUEL | SEEDS | FERTILIZER | TRANSPORT | OTHER
@@ -394,19 +470,19 @@ class Product(Base):
     __tablename__ = "products"
 
     id = Column(String, primary_key=True)
-    short_code = Column(String, unique=True)
+    short_code = Column("shortCode", String, unique=True)
     name = Column(String, nullable=False, default="Produit")
-    category_label = Column(String)
-    local_names = Column(JSON)             # {"moore": "...", "dioula": "..."}
+    category_label = Column("categoryLabel", String)
+    local_names = Column("localNames", JSON)             # {"moore": "...", "dioula": "..."}
     description = Column(Text)
     price = Column(Float, nullable=False)
     unit = Column(String, default="kg")
-    quantity_for_sale = Column(Float, default=0)
+    quantity_for_sale = Column("quantityForSale", Float, default=0)
     images = Column(JSON, default=list)
-    audio_url = Column(String)
-    producer_id = Column(String, ForeignKey("producers.id", ondelete="CASCADE"))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    audio_url = Column("audioUrl", String)
+    producer_id = Column("producerId", String, ForeignKey("producers.id", ondelete="CASCADE"))
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     def to_dict(self):
         return {
@@ -423,22 +499,29 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = Column(String, primary_key=True)
-    buyer_id = Column(String, ForeignKey("users.id"))
-    customer_name = Column(String)
-    customer_phone = Column(String)
-    zone_id = Column(String, ForeignKey("zones.id"))
-    payment_method = Column(String, default="CASH")   # CASH | MOBILE_MONEY | BANK_TRANSFER
+    buyer_id = Column("buyerId", String, ForeignKey("users.id"))
+    customer_name = Column("customerName", String)
+    customer_phone = Column("customerPhone", String)
+    zone_id = Column("zoneId", String, ForeignKey("zones.id"))
+    payment_method = Column("paymentMethod", String, default="CASH")
     city = Column(String)
-    gps_lat = Column(Float)
-    gps_lng = Column(Float)
-    delivery_desc = Column(String)
-    audio_url = Column(String)
-    status = Column(String, default="PENDING")         # PENDING | CONFIRMED | SHIPPED | DELIVERED | CANCELLED
-    source = Column(String, default="WHATSAPP")        # APP | WHATSAPP | VOICE_CALL
-    total_amount = Column(Float, default=0)
-    whatsapp_id = Column(String)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    gps_lat = Column("gpsLat", Float)
+    gps_lng = Column("gpsLng", Float)
+    delivery_desc = Column("deliveryDesc", String)
+    audio_url = Column("audioUrl", String)
+    status = Column(String, default="PENDING")
+    source = Column(String, default="WHATSAPP")
+    total_amount = Column("totalAmount", Float, default=0)
+    whatsapp_id = Column("whatsappId", String)
+
+    # --- Monitoring IA (Prisma: isAgentOrder) ---
+    is_agent_order = Column("isAgentOrder", Boolean, default=False)
+
+    # --- Client (Prisma: clientId) ---
+    client_id = Column("clientId", String, ForeignKey("clients.id"))
+
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
 
     def to_dict(self):
         return {
@@ -446,6 +529,7 @@ class Order(Base):
             "customer_name": self.customer_name, "customer_phone": self.customer_phone,
             "status": self.status, "total_amount": self.total_amount,
             "zone_id": self.zone_id, "source": self.source,
+            "is_agent_order": self.is_agent_order,
         }
 
 
@@ -454,10 +538,10 @@ class OrderItem(Base):
     __tablename__ = "order_items"
 
     id = Column(String, primary_key=True)
-    order_id = Column(String, ForeignKey("orders.id", ondelete="CASCADE"))
-    product_id = Column(String, ForeignKey("products.id"))
+    order_id = Column("orderId", String, ForeignKey("orders.id", ondelete="CASCADE"))
+    product_id = Column("productId", String, ForeignKey("products.id"))
     quantity = Column(Float, nullable=False)
-    price_at_sale = Column(Float, nullable=False)
+    price_at_sale = Column("priceAtSale", Float, nullable=False)
 
     def to_dict(self):
         return {
@@ -485,6 +569,76 @@ class MarketAlert(Base):
             "id": self.id, "product_name": self.product_name,
             "zone_id": self.zone_id, "buyer_phone": self.buyer_phone,
             "status": self.status,
+        }
+
+
+# ══════════════════════════════════════════════════════════════
+# AI MONITORING & HITL — Tables partagées avec Prisma (dashboard)
+# ══════════════════════════════════════════════════════════════
+
+class AgentAction(Base):
+    """
+    Actions des agents IA — HITL (Human-in-the-Loop).
+    Aligné avec Prisma: AgentAction (@@map "agent_actions").
+    """
+    __tablename__ = "agent_actions"
+
+    id = Column(String, primary_key=True)
+    agent_name = Column("agentName", String, nullable=False, index=True)
+    action_type = Column("actionType", String, nullable=False)
+    payload = Column(JSON, nullable=False)
+    status = Column(String, default="PENDING", index=True)
+    priority = Column(String, default="MEDIUM")
+
+    order_id = Column("orderId", String, ForeignKey("orders.id"), unique=True)
+    user_id = Column("userId", String, ForeignKey("users.id"))
+
+    audit_trail_id = Column("auditTrailId", String)
+    ai_reasoning = Column("aiReasoning", Text)
+
+    admin_notes = Column("adminNotes", Text)
+    validated_by_id = Column("validatedById", String)
+
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updated_at = Column("updatedAt", DateTime(timezone=True), default=func.now(), onupdate=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "agent_name": self.agent_name,
+            "action_type": self.action_type, "payload": self.payload,
+            "status": self.status, "priority": self.priority,
+            "order_id": self.order_id, "user_id": self.user_id,
+            "ai_reasoning": self.ai_reasoning, "admin_notes": self.admin_notes,
+            "validated_by_id": self.validated_by_id,
+        }
+
+
+class ExternalContext(Base):
+    """
+    Fichiers/documents externes injectés dans le RAG.
+    Aligné avec Prisma: ExternalContext (@@map "external_context_files").
+    """
+    __tablename__ = "external_context_files"
+
+    id = Column(String, primary_key=True)
+    file_name = Column("fileName", String, nullable=False)
+    file_type = Column("fileType", String, nullable=False)
+    file_url = Column("fileUrl", String, nullable=False)
+
+    category = Column(String)
+    zone_id = Column("zoneId", String, ForeignKey("zones.id"))
+
+    is_vectorized = Column("isVectorized", Boolean, default=False)
+    mcp_server_id = Column("mcpServerId", String)
+
+    created_at = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+
+    def to_dict(self):
+        return {
+            "id": self.id, "file_name": self.file_name,
+            "file_type": self.file_type, "file_url": self.file_url,
+            "category": self.category, "zone_id": self.zone_id,
+            "is_vectorized": self.is_vectorized,
         }
 
 

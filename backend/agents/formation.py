@@ -6,9 +6,14 @@ from langgraph.graph import END, StateGraph
 
 from backend.agents.system.prompts import FORMATION_SYSTEM_TEMPLATE, FORMATION_USER_TEMPLATE, STYLE_GUIDANCE
 
-from ..rag.components import get_groq_sdk
-from ..rag.metric import RAGEvaluator
-from ..rag.retriever import AgileRetriever
+# MCP Protocols
+from backend.protocols.mcp import MCPRagServer, MCPContextServer
+
+# AG-UI Protocols
+from backend.protocols.ag_ui import (
+    AgriResponse, AGUIComponent, ComponentType,
+    TextBlock, ActionButton, ActionType, ListPicker,
+)
 
 from backend.tools.formation import FormationTool
 from backend.tools.refine import RefineTool
@@ -38,37 +43,39 @@ class FormationAgentState(TypedDict, total=False):
     warnings: Annotated[List[str], operator.add] # Les warnings s'ajoutent
     critique_retry_count: int
     rewrited_retry_count: int
+    agri_response: Optional[AgriResponse]
 
-             
 class FormationCoach:
     def __init__(
         self,
         llm_client=None,
-        retriever: Optional[AgileRetriever] = None,
-        evaluator: Optional[RAGEvaluator] = None,
+        mcp_rag: Optional[MCPRagServer] = None,
+        mcp_context: Optional[MCPContextServer] = None,
+        # Keep old params for backward compatibility if needed, but they are deprecated
+        retriever=None,
+        evaluator=None,
     ):
         self.tool = FormationTool(llm=llm_client)
-        self.refine =RefineTool(llm=llm_client)
+        self.refine = RefineTool(llm=llm_client)
+        
+        # Protocol Servers
+        self.mcp_rag = mcp_rag
+        self.mcp_context = mcp_context
+        
         self.model_planner = "llama-3.1-8b-instant"
         self.model_answer = "llama-3.3-70b-versatile"
 
         try:
+            from backend.rag.components import get_groq_sdk
             self.llm = llm_client if llm_client else get_groq_sdk()
         except Exception as exc:
             logger.error("Impossible d'initialiser le LLM : %s", exc)
             self.llm = None
-
-        try:
-            self.retriever = retriever if retriever else AgileRetriever()
-        except Exception as exc:
-            logger.error("RAG indisponible : %s", exc)
-            self.retriever = None
-
-        try:
-            self.evaluator = evaluator if evaluator else RAGEvaluator()
-        except Exception as exc:
-            logger.warning("Évaluateur indisponible : %s", exc)
-            self.evaluator = None
+        
+        # Retro-compatibility wrapper if old retriever passed
+        if retriever and not mcp_rag:
+             logger.warning("Using legacy retriever. Please migrate to MCPRagServer.")
+             # No simple wrapper possible without proper MCP init, assuming mcp_rag is passed by orchestrator
 
     # ------------------------------------------------------------------ #
     # Nœuds du graphe                                                    #
@@ -76,27 +83,29 @@ class FormationCoach:
 
     def analyze_node(self, state: FormationAgentState) -> FormationAgentState:
         """
-        Ce noeud permet d'analyser la question de l'utilisateur afin de retourner:
-            - intent: type de la demande (FORMATION, OFF_TOPIC)?A revoir coe on fait l intent avec l orchestrateur,est ce pertinent
-            - focus_topics: les sujets clés à aborder
-            - field_actions: les actions terrain recommandées
-            - safety_flags: les alertes de sécurité à considérer
-            - urgency: niveau d'urgence (NORMAL, HIGH, CRITICAL)
-            - is_relevant: si la question est pertinente pour l'agent formation
-            - rejection_reason: raison du rejet si hors sujet
-            - warnings: liste des avertissements
-            - status: état du nœud après analyse
-        
+        Analyse la question + Récupère le contexte via MCP Context.
         """
         query = state.get("user_query", "").strip()
-        profile = state.get("learner_profile", {})
+        
+        # MCP : Récupération du profil via le protocole
+        profile = {}
+        if self.mcp_context:
+            user_id = state.get("user_profile", {}).get("id", "anonymous")
+            try:
+                profile = self.mcp_context.read_user_context(user_id)
+            except Exception as e:
+                 logger.warning(f"MCP Context read failed: {e}")
+                 profile = state.get("learner_profile", {})
+        else:
+            profile = state.get("learner_profile", {})
+
         warnings = list(state.get("warnings", []))
 
         if not query:
             warnings.append("La question de formation est vide.")
             return {"status": "ERROR", "warnings": warnings}
         
-        # On analyse la question de l'utilisateur a partir de l'outil FormationTool:_analyze_request
+        # On analyse la question
         analysis = self.tool._analyze_request(query, profile)
 
         intent = analysis.get("intent", "FORMATION")
@@ -122,221 +131,202 @@ class FormationCoach:
 
     def retrieve_node(self, state: FormationAgentState) -> FormationAgentState:
         """
-        Ce noeud effectue la recherche RAG pour récupérer le contexte pédagogique pertinent.Il retourne:
-            - optimized_query: la requête optimisée pour la recherche
-            - retrieved_context: le texte contextuel récupéré
-            - sources: les métadonnées des documents sources
-            - status: état du nœud après récupération
-            - warnings: liste des avertissements
-            - status: état du nœud après retrieving
-
-        Note: Si la question est jugée hors-sujet, ce noeud peut être sauté ou retourner un contexte vide.
-                En cas d'échec de récupération, le nœud doit retourner un statut spécifique (ex: NO_CONTEXT) pour déclencher une reformulation (noeud rewrite).
+        Recherche RAG via MCPRagServer.
         """
-
         warnings = list(state.get("warnings", []))
-
         query = state.get("user_query", "").strip()
+
+        # Profil pour le niveau (via MCP Context si dispo, sinon state)
         profile = state.get("learner_profile", {})
+        if self.mcp_context:
+            try:
+                profile = self.mcp_context.read_user_context(state.get("user_profile", {}).get("id"))
+            except: 
+                pass
+
         if not query:
-            warnings.append("La question de formation est vide.")
             return {"status": "ERROR", "warnings": warnings}
 
-        # GESTION DU RETRY : Si on vient d'une reformulation, on garde la query optimisée
+        # GESTION DU RETRY
         if state.get("status") == "RETRY_SEARCH" and state.get("optimized_query"):
-            optimized_query = state.get("optimized_query")
-
-            # On planifie la recherche avec la query optimisée
-            plan = self.tool._plan_retrieval(optimized_query, profile)
+             # Déjà optimisé
+             optimized_query = state.get("optimized_query")
         else:
-            # Flux normal
-            plan = self.tool._plan_retrieval(query, profile)
-            optimized_query = plan.get("optimized_query") or query
+             # Utilise l'outil interne juste pour la reformulation (planning)
+             plan = self.tool._plan_retrieval(query, profile)
+             optimized_query = plan.get("optimized_query") or query
+        
+        # ── APPEL MCP RAG ──
+        if not self.mcp_rag:
+            warnings.append("MCP RAG Server manquant.")
+            return {"status": "NO_CONTEXT", "warnings": warnings}
             
-        warnings.extend(plan.get("warnings", []))
+        try:
+            # MCP Search via call_tool abstraction
+            search_level = profile.get("niveau", "debutant")
+            args = {"query": optimized_query, "level": search_level, "top_k": 4}
+            resp = self.mcp_rag.call_tool("search_agronomy_docs", args)
 
-        if not self.retriever:
-            warnings.append("Le moteur RAG(retriever) est indisponible.")
+            if not resp or resp.get("status") != "ok":
+                warnings.append("Aucun résultat MCP trouvé ou erreur MCP.")
+                return {
+                    "optimized_query": optimized_query,
+                    "retrieved_context": "",
+                    "sources": [],
+                    "status": "NO_CONTEXT",
+                    "warnings": warnings,
+                }
+
+            # Parse the returned content which is a JSON dump inside content[0]["text"]
+            content_list = resp.get("content") or []
+            if not content_list:
+                return {
+                    "optimized_query": optimized_query,
+                    "retrieved_context": "",
+                    "sources": [],
+                    "status": "NO_CONTEXT",
+                    "warnings": warnings + ["MCP response empty content"]
+                }
+
+            # Try to load JSON from the first content entry
+            raw_text = content_list[0].get("text", "")
+            try:
+                parsed = json.loads(raw_text)
+            except Exception:
+                # If already a dict or unexpected formatting, try to handle gracefully
+                parsed = raw_text if isinstance(raw_text, dict) else {}
+
+            # Extract context and sources in a robust way
+            context_text = parsed.get("context") if isinstance(parsed, dict) else str(parsed)
+            sources = parsed.get("sources", []) if isinstance(parsed, dict) else []
+
+            # Normalize sources to expected format
+            norm_sources = []
+            for s in sources:
+                if isinstance(s, dict):
+                    norm_sources.append({"title": s.get("source", s.get("title", "Doc")), "uri": s.get("uri")})
+                else:
+                    norm_sources.append({"title": str(s), "uri": None})
+
             return {
                 "optimized_query": optimized_query,
-                "sources": [],
-                "status": "NO_CONTEXT",
+                "retrieved_context": context_text or "",
+                "sources": norm_sources,
+                "status": "CONTEXT_FOUND",
                 "warnings": warnings,
             }
 
-        nodes = self.retriever.search(
-            optimized_query,
-            user_level=state.get("learner_profile", {}).get("niveau", "debutant"),
-        )
-        if not nodes:
-            warnings.append("Aucun contenu pertinent trouvé dans la base pédagogique.")
-            return {
-                "optimized_query": optimized_query,
-                "retrieved_context": "",
-                "sources": [],
-                "status": "NO_CONTEXT",
-                "warnings": warnings,
-            }
-        
-        # Adaptation pour les scores du retriever après reranking
-        # IMPORTANT: 
-        # - Sans HyDE: scores positifs élevés (4-5) = très pertinent
-        # - Avec HyDE: scores négatifs proches de 0 (-2 à 0) = pertinent
-        #              scores très négatifs (< -5) = non pertinent
-        # On accepte donc tout score > -3.0
-        similarity_threshold = -3.0  # Seuil adapté pour HyDE + CrossEncoder reranking
-        
-        if nodes and nodes[0].score < similarity_threshold:
-            warnings.append(f"Qualité de recherche faible (Score max: {nodes[0].score:.2f}).")
-
-        relevant_docs = [doc for doc in nodes if doc.score > similarity_threshold]
-        
-        if not relevant_docs:
-             return {
-                "optimized_query": optimized_query,
-                "retrieved_context": "",
-                "sources": [],
-                "status": "NO_CONTEXT", # Déclenchera un rewrite
-                "warnings": warnings,
-            }
-
-        context_text = self.tool._build_context(relevant_docs)
-        sources = self.tool._serialize_sources(relevant_docs)
-
-        return {
-            "optimized_query": optimized_query,
-            "retrieved_context": context_text,
-            "sources": sources,
-            "status": "CONTEXT_FOUND",
-            "warnings": warnings,
-        }
+        except Exception as e:
+            logger.error(f"MCP RAG Error: {e}")
+            warnings.append(f"Erreur MCP RAG: {e}")
+            return {"status": "NO_CONTEXT", "warnings": warnings}
 
 
     def compose_node(self, state: FormationAgentState) -> FormationAgentState:
         warnings = list(state.get("warnings", []))
         
-
+        # AG-UI Response Builder
+        agri_response = AgriResponse()
+        
+        # Gestion du hors-sujet
         if state.get("is_relevant") is False:
             rejection = state.get("rejection_reason") or "Désolé, je ne peux répondre qu'aux questions agricoles."
-            # On construit une réponse polie qui redirige l'utilisateur
-            final_rejection = (
-                "😊 **Bonjour !**\n\n"
-                f"{rejection}\n\n"
-                "En tant qu'expert AgriConnect, je suis à votre disposition pour toute question sur "
-                "vos cultures, l'élevage ou vos formations techniques.Si vous pensez que j'ai commis un commis une erreur,essayer de reformuler votre question"
-            )
+            final_rejection = f"😊 **Bonjour !**\n\n{rejection}\n\nEn tant qu'expert AgriConnect, je suis à votre disposition pour toute question sur vos cultures."
+            
+            # AG-UI : Réponse simple pour le hors-sujet
+            agri_response.add_text(final_rejection)
+            
             return {
                 "answer_draft": final_rejection,
+                "final_response": final_rejection,
+                "agri_response": agri_response,
                 "status": "OFF_TOPIC",
                 "warnings": warnings
             }
 
-        feedback_hallucination = ""
-        if state.get("status") == "REJECTED":
-            feedback_hallucination = (
-                "\n\n⚠️ RECOURS : Ta réponse précédente a été rejetée car elle contenait "
-                "des informations (chiffres ou conseils) non présentes dans les documents fournis. "
-                "REFAIS ta réponse en étant strictement fidèle au contexte. "
-                "Si une information n'est pas là, ne l'invente pas."
-            )
-      
+        # Contexte et Prompt Preparation
         context = state.get("retrieved_context", "").strip()
         query = state.get("user_query", "").strip()
-        modules = state.get("learning_modules", [])
-        prerequisites = state.get("prerequisites", [])
         profile_text = self.tool._format_profile(state.get("learner_profile", {}))
-        sources = state.get("sources", [])
-        intent = state.get("intent", "")
-        urgency = state.get("urgency", "")
-
+        
         if not query:
-            warnings.append("Question absente lors de la génération de réponse.")
             return {"warnings": warnings, "status": "ERROR"}
 
-        fallback = self.tool._fallback_answer(
-            query=query,
-            profile_text=profile_text,
-            prerequisites=prerequisites,
-            modules=modules,
-            sources=sources,
-        )
-
-        if not context:
-            warnings.append("Réponse formulée sans contexte RAG.")
-            return {
-                "answer_draft": fallback,
-                "final_response": fallback,
-                "warnings": warnings,
-                "status": "NO_CONTEXT",
-            }
-
-        if not self.llm:
-            warnings.append("LLM indisponible, utilisation du fallback.") 
-            return {
-                "answer_draft": fallback,
-                "final_response": fallback,
-                "warnings": warnings,
-                "status": "LLM_DOWN",
-            }
-
-        # Adaptation selon profil et intent
-        profile = state.get("learner_profile", {})
-        level = str(profile.get("niveau", "standard")).lower()
-        culture = profile.get("culture_actuelle", "")
+        # Génération de réponse via LLM
+        final_answer = "Réponse technique indisponible."
         
-        # Style adaptatif centralisé (prompts.py)
-        style_guidance = STYLE_GUIDANCE.get(level, STYLE_GUIDANCE["default"])
-
-# Préparation de la ligne culture pour éviter la logique complexe dans le f-string
-        culture_context = f"Culture actuelle : {culture}" if culture else ""
-        # 1. D'abord, prépare les chaînes formatées
-        system_content = FORMATION_SYSTEM_TEMPLATE.format(
-            style_guidance=style_guidance,
-            culture_context=culture_context
-        )
-
-        user_content = FORMATION_USER_TEMPLATE.format(
-            query=query,
-            feedback_hallucination=feedback_hallucination,
-            intent=intent,
-            urgency=urgency,
-            profile_text=profile_text,
-            context=context
-        )
-
+        # ... Logique LLM existante ... (simplifiée pour AG-UI)
         try:
+            # Construction du prompt (inchangée, utilise les templates)
+            profile = state.get("learner_profile", {})
+            level = str(profile.get("niveau", "standard")).lower()
+            style_guidance = STYLE_GUIDANCE.get(level, STYLE_GUIDANCE["default"])
+            
+            system_content = FORMATION_SYSTEM_TEMPLATE.format(
+                style_guidance=style_guidance,
+                culture_context=f"Culture: {profile.get('culture_actuelle', 'N/A')}"
+            )
+            user_content = FORMATION_USER_TEMPLATE.format(
+                query=query,
+                feedback_hallucination=state.get("feedback_hallucination", ""),
+                intent=state.get("intent", "FORMATION"),
+                urgency=state.get("urgency", "NORMAL"),
+                profile_text=profile_text,
+                context=context
+            )
+            
             completion = self.llm.chat.completions.create(
                 model=self.model_answer,
                 messages=[
                     {"role": "system", "content": system_content},
                     {"role": "user", "content": user_content},
                 ],
-                temperature=0.35,  # Plus de flexibilité pour adaptation naturelle
-                max_tokens=900,  # Plus d'espace pour réponses complètes
+                temperature=0.35,
+                max_tokens=900,
             )
-            answer = completion.choices[0].message.content
-            if not answer:
-                raise ValueError("Réponse vide du LLM.")
+            final_answer = completion.choices[0].message.content
             
-            return {
-                "answer_draft": answer,
-                "final_response": answer,
-                "warnings": warnings,
-                "status": "ANSWER_GENERATED",
-            }
-        except Exception as exc:
-            warnings.append(f"Erreur LLM pendant la formulation : {exc}")
-            return{
-                "answer_draft": fallback,
-                "final_response": fallback,
-                "warnings": warnings,
-                "status": "LLM_ERROR",
-            }
+        except Exception as e:
+            logger.error(f"LLM Error: {e}")
+            final_answer = "Désolé, je rencontre une difficulté technique pour formuler le conseil."
+            warnings.append(str(e))
+
+        # ── CONSTRUCTION AG-UI ──
+        
+        # 1. Texte principal (Markdown supporté par WhatsApp et Web)
+        agri_response.add_text(final_answer)
+        
+        # 2. Boutons d'action (Quick Replies)
+        # Suggérer des actions selon le contexte
+        if "maladie" in query.lower() or "ravageur" in query.lower():
+            agri_response.add(ListPicker(
+                title="Que voulez-vous faire ?",
+                items=[
+                    {"id": "photo_upload", "label": "📷 Envoyer une photo"},
+                    {"id": "call_expert", "label": "📞 Parler à un agent"}
+                ]
+            ))
+        else:
+            agri_response.add(ListPicker(
+                title="Aller plus loin :",
+                items=[
+                    {"id": "more_details", "label": "🔍 Plus de détails"},
+                    {"id": "related_topic", "label": "🌾 Sujet associé"}
+                ]
+            ))
+
+        return {
+            "answer_draft": final_answer,
+            "final_response": final_answer,
+            "agri_response": agri_response,
+            "warnings": warnings,
+            "status": "ANSWER_GENERATED",
+        }
 
     def evaluate_node(self, state: FormationAgentState) -> FormationAgentState:
         warnings = list(state.get("warnings", []))
 
-        if not self.evaluator:
+        if not getattr(self, "evaluator", None):
             warnings.append("Évaluation automatique indisponible.")
             return {"warnings": warnings}
 

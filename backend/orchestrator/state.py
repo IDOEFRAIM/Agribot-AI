@@ -70,3 +70,13 @@ class GlobalAgriState(TypedDict):
 
     # --- Community Benchmark (reports) ---
     community_benchmark: Optional[Dict[str, Any]]
+
+    # --- HITL (Human-in-the-Loop) ---
+    requires_validation: Optional[bool]       # True si action risquée en attente
+    pending_action_id: Optional[str]          # ID de l'action figée
+    pending_action_payload: Optional[Dict[str, Any]]  # Données de l'action en attente
+    hitl_status: Optional[str]                # "PENDING" | "APPROVED" | "REJECTED"
+
+    # --- Context Elicitation ---
+    awaiting_context: Optional[bool]          # True si données manquantes
+    missing_fields: Optional[List[Dict[str, str]]]  # Champs à demander

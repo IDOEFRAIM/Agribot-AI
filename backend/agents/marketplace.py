@@ -21,24 +21,22 @@ from langgraph.graph import END, StateGraph
 from backend.agents.system.prompts import MARKETPLACE_SYSTEM_PROMPT
 from backend.tools.marketplace import MarketplaceTool
 
+# MCP & A2A & AG-UI Protocols
+from backend.protocols.mcp import MCPDatabaseServer
+from backend.protocols.a2a import A2ADiscovery, A2AMessage, MessageType, HandshakeStatus
+from backend.protocols.ag_ui import (
+    AgriResponse, AGUIComponent, ComponentType,
+    TextBlock, Card, ActionButton, ActionType, ListPicker,
+)
+
 logger = logging.getLogger("Agent.Marketplace")
 
 
 # ── État du graphe ──────────────────────────────────────────────
 class MarketplaceState(TypedDict, total=False):
-    user_query: str
-    user_phone: str
-    zone_id: str
-    user_profile: Dict[str, Any]  # résultat identify_or_create_user
-    producer_id: Optional[str]
-    farm_id: Optional[str]
-    intent: str  # REGISTER_STOCK, SELL_PRODUCT, CHECK_STOCK, CHECK_ORDERS,
-    # UPDATE_STOCK, FIND_BUYERS, FIND_PRODUCTS, CREATE_ORDER, HELP
-    parsed: Dict[str, Any]  # entités extraites par le LLM
-    action_result: Dict[str, Any]  # résultat de l'action CRUD
-    matches: List[Dict[str, Any]]  # résultats auto-matching
-    confirmation_text: str  # résumé vocal pour confirmation
+    # ...existing code...
     final_response: str
+    agri_response: Optional[AgriResponse]
     status: str
     warnings: List[str]
 
@@ -60,17 +58,16 @@ INTENTS = [
 class MarketplaceAgent:
     """Agent agribusiness — sous-graphe LangGraph appelé par l'orchestrateur."""
 
-    def __init__(self, llm_client=None):
+    def __init__(self, llm_client=None, mcp_db: MCPDatabaseServer = None, a2a: A2ADiscovery = None):
         self.model_planner = "llama-3.1-8b-instant"
         self.model_answer = "llama-3.3-70b-versatile"
-        self.tool = MarketplaceTool()
+        self.tool = MarketplaceTool() # Legacy tool, gradually migrate to MCP
+        self.mcp_db = mcp_db
+        self.a2a = a2a
 
         try:
-            if llm_client:
-                self.llm = llm_client
-            else:
-                from backend.rag.components import get_groq_sdk
-                self.llm = get_groq_sdk()
+            from backend.rag.components import get_groq_sdk
+            self.llm = llm_client if llm_client else get_groq_sdk()
         except Exception as exc:
             logger.error("Impossible d'initialiser le LLM Marketplace : %s", exc)
             self.llm = None
@@ -276,8 +273,10 @@ class MarketplaceAgent:
         return state
 
     def confirm_node(self, state: MarketplaceState) -> MarketplaceState:
-        """Génère la réponse conversationnelle à partir du résultat CRUD."""
+        """Génère la réponse conversationnelle (AG-UI) + Texte."""
         state = dict(state)
+        agri_response = AgriResponse(agent="marketplace")
+        
         if state.get("status") == "ERROR":
             return state
 
@@ -287,7 +286,8 @@ class MarketplaceAgent:
         user = state.get("user_profile", {})
         is_new = "NOUVEAU_UTILISATEUR" in state.get("warnings", [])
 
-        # Construire le contexte pour le LLM
+        # Génération texte via LLM (inchangé)
+        # ...existing code...
         context = {
             "intent": intent,
             "result": result,
@@ -314,20 +314,48 @@ class MarketplaceAgent:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
             )
-            state["final_response"] = resp.choices[0].message.content
+            final_text = resp.choices[0].message.content
         except Exception as e:
             logger.warning("Confirm node error : %s", e)
-            state["final_response"] = self._fallback_response(intent, result, is_new)
+            final_text = self._fallback_response(intent, result, is_new)
+        
+        state["final_response"] = final_text
+        
+        # ── Construction AG-UI ──
+        response_obj = AgriResponse(agent="marketplace")
+        response_obj.add_text(final_text)
+        
+        # Ajout de composants interactifs selon l'intent
+        if intent == "SELL_PRODUCT":
+             response_obj.add(ListPicker(
+                title="Options de vente :",
+                items=[
+                    {"id": "view_offers", "label": "👀 Voir les offres"},
+                    {"id": "modify_price", "label": "✏️ Modifier prix"}
+                ]
+            ))
+        elif intent == "CHECK_STOCK":
+             if result.get("stocks"):
+                 # Créer un résumé structuré du stock en Card
+                 stock_lines = "\n".join(
+                     f"• {s.get('item_name')}: {s.get('quantity')} kg"
+                     for s in result.get("stocks", [])
+                 )
+                 response_obj.add_card(
+                     title="Votre Stock",
+                     body=stock_lines,
+                 )
 
+        state["agri_response"] = response_obj
         state["status"] = "CONFIRMED"
         return state
 
     def match_check_node(self, state: MarketplaceState) -> MarketplaceState:
         """
-        Après une mise en vente, vérifie s'il y a des acheteurs en attente.
-        Ajoute les matches à la réponse.
+        Vérifie les acheteurs (Local DB) ET Broadcast A2A pour la scalabilité.
         """
         state = dict(state)
+        # ...existing code...
         intent = state.get("intent")
 
         if intent != "SELL_PRODUCT":
@@ -340,6 +368,7 @@ class MarketplaceAgent:
         product_id = result.get("product_id")
 
         if product_name and product_id:
+            # 1. Matching Local (Legacy)
             matches = self.tool.auto_match(product_name, zone_id, phone, product_id)
             if matches:
                 state["matches"] = matches
@@ -352,6 +381,35 @@ class MarketplaceAgent:
                 match_msg += "\nJe peux les mettre en contact avec vous. Voulez-vous ?"
 
                 state["final_response"] = state.get("final_response", "") + match_msg
+                
+                # Mise à jour AG-UI
+                if "agri_response" in state:
+                    state["agri_response"].add_text(match_msg)
+            
+            # 2. Diffusion A2A (Nouveau Protocole)
+            if self.a2a:
+                try:
+                    # On broadcast l'offre à tous les agents "ACHETEUR" ou "GROSSISTE"
+                    offer_msg = A2AMessage(
+                        message_type=MessageType.BROADCAST,
+                        sender_id=f"agent_market_{state.get('user_phone')}",  # Agent éphémère pour l'utilisateur
+                        intent="SELL_OFFER",
+                        zone=zone_id or "global",
+                        crop=product_name,
+                        payload={
+                            "product": product_name,
+                            "quantity": state.get("parsed", {}).get("quantity"),
+                            "price": state.get("parsed", {}).get("price"),
+                            "product_id": product_id,
+                            "seller_phone": phone # En production, on masque ça
+                        }
+                    )
+                    # Broadcast sur le topic du produit
+                    topic = f"SELL_{product_name.upper()}_{zone_id}"
+                    count = self.a2a.broadcast_message(offer_msg, topic=topic)
+                    logger.info(f"📢 A2A Broadcast: Offre {product_name} diffusée à {count} agents.")
+                except Exception as e:
+                    logger.warning(f"A2A Broadcast failed: {e}")
 
         state["status"] = "COMPLETED"
         return state

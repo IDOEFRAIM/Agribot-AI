@@ -10,6 +10,7 @@ from .models import (
     Base, User, Zone, Alert, MarketItem, WeatherData,
     Conversation, ConversationMessage,
     UserCrop, SurplusOffer, SoilDiagnosis, PlantDiagnosis, Reminder,
+    AgentAction, ExternalContext,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,29 +20,110 @@ class AgriDatabase:
     Abstraction de la couche mémoire (PostgreSQL).
     Gère les connexions, les sessions et les opérations métier pour l'Agent.
 
-    Accepte soit une URL de DB (crée son propre engine),
-    soit un engine/session_factory existant (réutilise celui de core/database.py).
+    Deux modes d'initialisation :
+      1. db_url      → crée son propre engine (mode standalone)
+      2. engine + session_factory → réutilise le pool centralisé (mode production)
     """
+    def __init__(self, db_url: str = None, *, engine=None, session_factory=None):
+        """
+        Initialise la connexion à la base de données.
 
-    def __init__(self, db_url: str = "", engine=None, session_factory=None):
-        if engine and session_factory:
-            # Réutilise l'engine centralisé de core/database.py
+        SÉCURITÉ : create_all() utilise checkfirst=True (défaut SQLAlchemy).
+        Cela signifie qu'il ne crée que les tables MANQUANTES, sans jamais
+        DROP ou ALTER les tables existantes gérées par Prisma (web).
+        """
+        if engine is not None and session_factory is not None:
+            # Mode production : réutilise le pool centralisé de core/database.py
             self.engine = engine
             self.SessionLocal = session_factory
+            logger.info("✅ AgriDatabase initialisé (pool centralisé)")
         elif db_url:
-            self.engine = create_engine(
-                db_url,
-                pool_size=10,
-                max_overflow=20,
-                pool_pre_ping=True,
-            )
-            self.SessionLocal = sessionmaker(
-                autocommit=False,
-                autoflush=False,
-                bind=self.engine,
-            )
+            # Mode standalone : crée son propre engine
+            self.engine = create_engine(db_url, pool_pre_ping=True)
+            self.SessionLocal = sessionmaker(bind=self.engine, expire_on_commit=False)
+            logger.info("✅ AgriDatabase initialisé (engine propre)")
         else:
-            raise ValueError("DATABASE_URL ou engine+session_factory requis.")
+            raise ValueError(
+                "AgriDatabase: fournir db_url OU (engine + session_factory)"
+            )
+
+        # create_all(checkfirst=True) : crée uniquement les tables manquantes
+        # N'écrase JAMAIS les tables existantes (safe pour coexistence Prisma)
+        try:
+            Base.metadata.create_all(self.engine, checkfirst=True)
+        except Exception as e:
+            logger.warning("DB schema sync (non-fatal): %s", e)
+    
+    # ═══════════════════════════════════════════════════════════
+    # AUDIT TRAIL & PREUVE DE PROTOCOLE (Axe 3 Financement)
+    # ═══════════════════════════════════════════════════════════
+
+    def log_audit_action(
+        self,
+        agent_name: str,
+        action_type: str,
+        user_id: str,
+        protocol: str,
+        payload: Dict[str, Any],
+        resource: str = "internal",
+        confidence: float = 1.0
+    ):
+        """
+        Enregistre une action critique pour la traçabilité bancaire.
+        Écriture NON-BLOQUANTE (thread séparé) pour ne pas ralentir la réponse.
+        Génère une signature SHA-256 pour sceller l'enregistrement.
+        Idempotent : la clé hash_signature empêche les doublons.
+        """
+        import hashlib
+        import json
+        from concurrent.futures import ThreadPoolExecutor
+
+        payload_str = json.dumps(payload, sort_keys=True, default=str)
+        signature_base = f"{agent_name}:{action_type}:{user_id}:{protocol}:{payload_str}"
+        signature = hashlib.sha256(signature_base.encode()).hexdigest()
+
+        def _write_audit():
+            session = self.SessionLocal()
+            try:
+                # Idempotence: skip si signature déjà existante
+                exists = session.execute(
+                    text("SELECT 1 FROM agent_audit_trails WHERE hash_signature = :sig LIMIT 1"),
+                    {"sig": signature}
+                ).fetchone()
+                if exists:
+                    logger.debug("Audit doublon ignoré: %s", signature[:8])
+                    return
+
+                query = text("""
+                    INSERT INTO agent_audit_trails 
+                    (agent_name, action_type, user_id, protocol_used, resource_accessed, 
+                     decision_payload, confidence_score, hash_signature)
+                    VALUES 
+                    (:agent, :action, :uid, :proto, :res, :payload, :conf, :sig)
+                """)
+                session.execute(query, {
+                    "agent": agent_name,
+                    "action": action_type,
+                    "uid": user_id,
+                    "proto": protocol,
+                    "res": resource,
+                    "payload": payload_str,
+                    "conf": confidence,
+                    "sig": signature
+                })
+                session.commit()
+                logger.info(f"🔒 Audit Logged: {agent_name} -> {action_type} [{signature[:8]}]")
+            except Exception as e:
+                logger.error(f"Audit Log Error: {e}")
+                session.rollback()
+            finally:
+                session.close()
+
+        # Écriture asynchrone — ne bloque pas la réponse utilisateur
+        try:
+            ThreadPoolExecutor(max_workers=1).submit(_write_audit)
+        except Exception as e:
+            logger.error("Audit async submit failed: %s", e)
 
     @contextmanager
     def _get_session(self):
@@ -64,8 +146,7 @@ class AgriDatabase:
             if user is None:
                 return None
             return {"id": user.id, "phone": user.phone, "name": user.name,
-                    "zone_id": user.zone_id, "language": user.language,
-                    "is_onboarded": user.is_onboarded}
+                    "zone_id": user.zone_id, "role": user.role}
 
     def onboard_user(self, phone: str, name: str, zone_id: str, lang: str = "fr") -> Dict[str, Any]:
         with self._get_session() as session:
@@ -75,12 +156,10 @@ class AgriDatabase:
                 phone=phone,
                 name=name,
                 zone_id=zone_id,
-                language=lang,
-                is_onboarded=True
             )
             session.add(user)
             return {"id": user_id, "phone": phone, "name": name,
-                    "zone_id": zone_id, "language": lang}
+                    "zone_id": zone_id}
 
     # --- LOGIQUE ALERTES (Sentinelle) ---
 
@@ -159,20 +238,26 @@ class AgriDatabase:
         Sauvegarde un échange complet (question + réponse).
         Retourne le conversation_id.
         """
-        with self._get_session() as session:
-            conv_id = str(uuid.uuid4())
-            conv = Conversation(id=conv_id, user_id=user_id, channel=channel)
+        session: Session = self.SessionLocal()
+        conv_id = str(uuid.uuid4())
+        try:
+            conv = Conversation(
+                id=conv_id,
+                user_id=user_id,
+                query=user_message or "",
+                response=assistant_message or "Informations indisponibles",
+                audio_url=audio_url,
+                mode=channel if channel in ("text", "voice", "sms") else "text",
+            )
             session.add(conv)
-            session.flush()
 
-            # Message utilisateur
+            # Also keep granular messages for agent memory
             session.add(ConversationMessage(
                 id=str(uuid.uuid4()),
                 conversation_id=conv_id,
                 role="user",
                 content=user_message or "",
             ))
-            # Réponse assistant
             session.add(ConversationMessage(
                 id=str(uuid.uuid4()),
                 conversation_id=conv_id,
@@ -180,7 +265,18 @@ class AgriDatabase:
                 content=assistant_message or "Informations indisponibles",
                 audio_url=audio_url,
             ))
+
+            session.commit()
             return conv_id
+        except Exception as e:
+            logger.error("DB persist conversation failed: %s", e)
+            try:
+                session.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            session.close()
 
     # ── PROACTIVE : Surplus / Marché (MarketCoach) ────────────────
 

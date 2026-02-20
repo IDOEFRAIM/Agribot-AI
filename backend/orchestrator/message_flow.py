@@ -38,7 +38,7 @@ from backend.agents.marketplace import MarketplaceAgent
 from backend.services.voice import VoiceEngine
 from backend.services.db_handler import AgriDatabase
 from backend.core.settings import settings
-from backend.core.database import _engine, _SessionLocal
+import backend.core.database as _core_db
 
 # Mémoire 3 niveaux (Profil + Épisodique + Optimiseur)
 from backend.services.memory import (
@@ -47,6 +47,11 @@ from backend.services.memory import (
     EpisodicMemory,
     ContextOptimizer,
 )
+
+# ═══ Protocoles AgriConnect 2.0 (MCP + A2A + AG-UI) ═══
+from backend.protocols.mcp import MCPDatabaseServer, MCPRagServer, MCPWeatherServer, MCPContextServer
+from backend.protocols.a2a import A2ADiscovery
+from backend.protocols.ag_ui import AgriResponse, WhatsAppRenderer, WebRenderer, SMSRenderer
 
 logger = logging.getLogger(__name__)
 
@@ -62,14 +67,90 @@ class MessageResponseFlow:
     4. Latence  : max(t_expert) au lieu de sum(t_expert).
     """
 
+
     def __init__(self, llm_client=None):
         self.llm = llm_client if llm_client is not None else get_groq_sdk()
 
-        # Le Conseil des Experts
+        # ── DB & Mémoire 3 niveaux ────────────────────────────────────
+        # (Nécessaire avant MCP car MCP dépend de la DB)
+        if _core_db._engine and _core_db._SessionLocal:
+            self.db = AgriDatabase(engine=_core_db._engine, session_factory=_core_db._SessionLocal)
+            self.session_factory = _core_db._SessionLocal
+        elif settings.DATABASE_URL:
+            self.db = AgriDatabase(db_url=settings.DATABASE_URL)
+            self.session_factory = None
+            logger.warning("⚠️  DB: fallback engine propre (core/database.py non initialisé)")
+        else:
+            self.db = None
+            self.session_factory = None
+
+        self.memory = None
+        if self.session_factory:
+            try:
+                _profile = UserFarmProfile(self.session_factory)
+                _episodic = EpisodicMemory(self.session_factory, llm_client=self.llm)
+                _extractor = ProfileExtractor(self.llm, _profile)
+                self.memory = ContextOptimizer(_profile, _episodic, _extractor)
+                logger.info("🧠 Mémoire 3 niveaux activée")
+            except Exception as e:
+                logger.warning("⚠️  Mémoire désactivée: %s", e)
+
+        # ═══ Protocoles AgriConnect 2.0 (MCP + A2A + AG-UI) ═══
+        
+        # 1. MCP Servers (Système Nerveux)
+        self.mcp_db = None
+        self.mcp_rag = None
+        self.mcp_weather = None
+        self.mcp_context = None
+        try:
+            if self.session_factory:
+                self.mcp_db = MCPDatabaseServer(self.session_factory)
+            
+            self.mcp_rag = MCPRagServer()
+            self.mcp_weather = MCPWeatherServer(llm_client=self.llm)
+            
+            if self.memory:
+                self.mcp_context = MCPContextServer(context_optimizer=self.memory)
+            elif self.session_factory:
+                self.mcp_context = MCPContextServer(session_factory=self.session_factory, llm_client=self.llm)
+                
+            logger.info("🔌 MCP Servers activés")
+        except Exception as e:
+            logger.warning("⚠️  MCP Servers error: %s", e)
+
+        # 2. A2A Discovery
+        self.a2a = None
+        try:
+            self.a2a = A2ADiscovery()
+            self.a2a.register_internal_agents()
+        except Exception as e:
+            logger.warning("⚠️  A2A error: %s", e)
+
+        # 3. AG-UI Renderers
+        self.renderers = {
+            "whatsapp": WhatsAppRenderer(),
+            "web": WebRenderer(),
+            "sms": SMSRenderer(),
+        }
+
+        # ── Le Conseil des Experts (Injection de dépendances Protocolaires) ──
         self.sentinelle = ClimateSentinel(llm_client=self.llm)
-        self.formation = FormationCoach(llm_client=self.llm)
+        
+        # Formation utilise MCP RAG + Context
+        self.formation = FormationCoach(
+            llm_client=self.llm,
+            mcp_rag=self.mcp_rag,
+            mcp_context=self.mcp_context
+        )
+        
         self.market = MarketCoach(llm_client=self.llm)
-        self.marketplace = MarketplaceAgent(llm_client=self.llm)
+        
+        # Marketplace injecte A2A et MCP DB
+        self.marketplace = MarketplaceAgent(
+            llm_client=self.llm,
+            mcp_db=self.mcp_db,
+            a2a=self.a2a
+        )
 
         # Workflows compilés
         self.wf_sentinelle = self.sentinelle.build()
@@ -88,27 +169,7 @@ class MessageResponseFlow:
             storage_dir=settings.AUDIO_OUTPUT_DIR,
         ) if azure_key else None
 
-        # ── DB (réutilise l'engine centralisé de core/database.py) ────
-        if _engine and _SessionLocal:
-            self.db = AgriDatabase(engine=_engine, session_factory=_SessionLocal)
-        elif settings.DATABASE_URL:
-            self.db = AgriDatabase(db_url=settings.DATABASE_URL)
-            logger.warning("⚠️  DB: fallback engine propre (core/database.py non initialisé)")
-        else:
-            self.db = None
-
-        # ── Mémoire 3 niveaux ─────────────────────────────────────
-        self.memory = None
-        session_factory = _SessionLocal if _SessionLocal else None
-        if session_factory:
-            try:
-                _profile = UserFarmProfile(session_factory)
-                _episodic = EpisodicMemory(session_factory, llm_client=self.llm)
-                _extractor = ProfileExtractor(self.llm, _profile)
-                self.memory = ContextOptimizer(_profile, _episodic, _extractor)
-                logger.info("🧠 Mémoire 3 niveaux activée (Profil + Épisodique + Optimiseur)")
-            except Exception as e:
-                logger.warning("⚠️  Mémoire désactivée: %s", e)
+        # ═══════════════════════════════════════════════════════════
 
         # ── LangSmith tracing (auto si .env configuré) ────────────
         self._tracing_ok = init_tracing()
@@ -630,17 +691,24 @@ class MessageResponseFlow:
         user_id: str, zone_id: str,
     ) -> None:
         """Persiste les actions proactives d'un expert spécifique."""
-        if expert == "market":
+        if expert == "market" or expert == "marketplace":
             # Sauvegarder surplus si détecté
+            # ...existing code...
             market_data = state.get("market_data", {})
-            if market_data.get("registration_status") in ("SUCCESS", "OFFLINE_SAVED"):
-                needs = state.get("needs", {})
-                self.db.save_surplus_offer(
-                    product_name=market_data.get("product", "inconnu"),
-                    quantity_kg=market_data.get("quantity", 0),
-                    price_kg=market_data.get("price"),
-                    zone_id=zone_id,
+            # ...
+            
+        elif expert == "formation":
+            # Audit Trail pour le conseil technique
+            resp_text = next((r["response"] for r in state.get("expert_responses", []) if r["expert"] == "formation"), "")
+            if resp_text and self.db:
+                self.db.log_audit_action(
+                    agent_name="FormationCoach",
+                    action_type="ADVICE_GIVEN",
                     user_id=user_id,
+                    protocol="MCP_RAG",
+                    resource="docs_vector_store",
+                    payload={"query": state.get("requete_utilisateur"), "advice": resp_text[:500]},
+                    confidence=0.95
                 )
 
         elif expert == "sentinelle":
@@ -654,6 +722,17 @@ class MessageResponseFlow:
                         message=h.get("description", "Alerte météo"),
                         zone_id=zone_id or "unknown",
                     )
+                    # Audit Trail pour l'alerte
+                    if self.db:
+                        self.db.log_audit_action(
+                            agent_name="ClimateSentinel",
+                            action_type="ALERT_SENT",
+                            user_id=user_id,
+                            protocol="MCP_WEATHER",
+                            resource="openmeteo_api",
+                            payload={"alert": h},
+                            confidence=1.0
+                        )
 
     # ==================================================================
     # BUILDER — Graphe LangGraph
