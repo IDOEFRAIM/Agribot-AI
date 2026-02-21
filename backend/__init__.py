@@ -1,5 +1,5 @@
 """
-Backend AgriConnect — Architecture Monolithique Modulaire.
+Backend src AgriConnect — Architecture Monolithique Modulaire.
 
 Couches (de bas en haut) :
   core/          → Fondations (settings, database, logger, security)
